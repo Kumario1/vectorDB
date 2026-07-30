@@ -1,0 +1,24 @@
+# Build
+build/
+cmake-build-*/
+out/
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Data / runtime
+data/
+*.log
+
+# Compilers / sanitizers
+*.dSYM/
+compile_commands.json
