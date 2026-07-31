@@ -11,7 +11,7 @@ This is a **learning project**, not a production competitor to Faiss/Milvus/etc.
 | 0 — Design document | Done (`notes/00-design.md`) |
 | 1a — `VectorStore` (record-per-vector) | Done |
 | 1b — `FlatVectorStore` (contiguous floats) | Done |
-| 1c — A vs B scan benchmark | Next |
+| 1c — A vs B scan benchmark | Done (see `notes/01-memory-layout.md`) |
 | 2+ — ID hash index, metrics, search, … | Not started |
 
 Full roadmap: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md)
@@ -63,8 +63,20 @@ src/                implementations
 tests/              GoogleTest suites
 tools/              CLI and utilities
 notes/              design + learning notes
-benchmarks/         (coming) A vs B scans
+benchmarks/         storage layout A vs B scan
 ```
+
+## Benchmark
+
+Compare Version A vs B sequential scans (Release build recommended):
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target storage_layout_benchmark
+./build/storage_layout_benchmark
+```
+
+Results and interpretation: [`notes/01-memory-layout.md`](notes/01-memory-layout.md)
 
 ## Design notes
 
