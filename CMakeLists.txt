@@ -43,3 +43,8 @@ add_executable(vectordb_cli
     tools/vectordb_cli.cpp
 )
 target_link_libraries(vectordb_cli PRIVATE vectordb)
+
+add_executable(storage_layout_benchmark
+    benchmarks/storage_layout_benchmark.cpp
+)
+target_link_libraries(storage_layout_benchmark PRIVATE vectordb)
