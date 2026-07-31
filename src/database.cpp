@@ -1,5 +1,10 @@
 #include "vectordb/database.hpp"
+#include "vectordb/distance.hpp"
+
 #include <algorithm>
+#include <cassert>
+#include <queue>
+#include <span>
 
 namespace vectordb {
 
@@ -69,6 +74,50 @@ Metric VectorDB::metric() const noexcept {
 std::size_t VectorDB::size() const noexcept {
     // return active_count_
     return active_count_;
+}
+
+float VectorDB::score_pair(std::span<const float> query, std::span<const float> candidate) const {
+    assert(query.size() == candidate.size());
+    switch (metric_) {
+        case Metric::cosine: return cosine_similarity(query, candidate);
+        case Metric::dot_product: return dot_product(query, candidate);
+        case Metric::euclidean: return -squared_euclidean(query, candidate);
+    }
+}
+
+struct WorseFirst {
+    bool operator()(const SearchResult& a, const SearchResult& b) const {
+        return a.score > b.score;  // higher score = "less" → lowest score on top
+    }
+};
+
+std::vector<SearchResult> VectorDB::search(std::span<const float> query, std::size_t k) const {
+    if (query.size() != dimensions()) {return {};}
+    if (k == 0) {return {};}
+    //min heap of all SearchResults by score (worst on top)
+    std::priority_queue<SearchResult, std::vector<SearchResult>, WorseFirst> heap;
+
+    for (std::size_t i = 0; i < store_.size(); ++i) {
+        if (store_.is_deleted(i)) {continue;}
+        float score = score_pair(query, store_.values_at(i));
+        heap.push({store_.id_at(i), score});
+        if (heap.size() > k) {heap.pop();}
+    }
+
+    std::vector<SearchResult> results;
+    while (!heap.empty()) {
+        results.push_back(heap.top());
+        heap.pop();
+    }
+    
+    std::reverse(results.begin(), results.end());
+    return results;
+    // 1) if query.size() != dimensions() → return {}  (or we add Status later)
+    // 2) if k == 0 → return {}
+    // 3) min-heap of SearchResult by score (worst on top)
+    //    hint: priority_queue with comparator where a.score > b.score means a is "lower priority"
+    // 4) for i in [0, store_.size()): skip deleted; score; push; if size>k pop
+    // 5) pop all into a vector, reverse so best is first
 }
 
 }  // namespace vectordb

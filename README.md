@@ -14,7 +14,7 @@ This is a **learning project**, not a production competitor to Faiss/Milvus/etc.
 | 1c — A vs B scan benchmark | Done (see `notes/01-memory-layout.md`) |
 | 2 — ID index + `VectorDB` CRUD | Done (`unordered_map` reference index) |
 | 3 — Distance metrics | Done (cosine, dot, squared Euclidean) |
-| 4 — Exact top-k search | Next |
+| 4 — Exact top-k search | Done (`v0.1-in-memory-exact`) |
 | 5+ — Persistence, WAL, … | Not started |
 
 Full roadmap: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md)
@@ -31,8 +31,9 @@ Full roadmap: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.m
 - **`IdIndex`** — `uint64_t` id → storage position (`std::unordered_map`)
 - **`VectorDB`** — `insert` / `get` / `update` / `remove` by id
 - **Distance** — `dot_product`, `cosine_similarity`, `squared_euclidean`
+- **Exact top-k search** — heap over all active vectors; cosine / dot / Euclidean
 
-Exact top-k search is next (Milestone 4).
+Version **0.1** in-memory exact engine is complete. Persistence starts at Milestone 5.
 
 ## Requirements
 

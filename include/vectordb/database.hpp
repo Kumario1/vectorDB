@@ -20,6 +20,11 @@ enum class Status {
     invalid_argument
 };
 
+struct SearchResult {
+    std::uint64_t id;
+    float score;
+};
+
 class VectorDB {
 public:
     explicit VectorDB(std::size_t dimensions, Metric metric = Metric::cosine);
@@ -29,6 +34,8 @@ public:
     Status remove(std::uint64_t id);
 
     std::optional<std::span<const float>> get(std::uint64_t id) const;
+    std::vector<SearchResult> search(std::span<const float> query, std::size_t k) const;
+    float score_pair(std::span<const float> query, std::span<const float> candidate) const;
 
     std::size_t dimensions() const noexcept;
     Metric metric() const noexcept;
