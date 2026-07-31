@@ -12,7 +12,10 @@ This is a **learning project**, not a production competitor to Faiss/Milvus/etc.
 | 1a — `VectorStore` (record-per-vector) | Done |
 | 1b — `FlatVectorStore` (contiguous floats) | Done |
 | 1c — A vs B scan benchmark | Done (see `notes/01-memory-layout.md`) |
-| 2+ — ID hash index, metrics, search, … | Not started |
+| 2 — ID index + `VectorDB` CRUD | Done (`unordered_map` reference index) |
+| 3 — Distance metrics | Done (cosine, dot, squared Euclidean) |
+| 4 — Exact top-k search | Next |
+| 5+ — Persistence, WAL, … | Not started |
 
 Full roadmap: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md)
 
@@ -25,8 +28,11 @@ Full roadmap: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.m
 - Two storage layouts:
   - **Version A** — `VectorStore`: `vector<VectorRecord>` (simple)
   - **Version B** — `FlatVectorStore`: SoA with one contiguous `float` buffer (cache-friendlier scans)
+- **`IdIndex`** — `uint64_t` id → storage position (`std::unordered_map`)
+- **`VectorDB`** — `insert` / `get` / `update` / `remove` by id
+- **Distance** — `dot_product`, `cosine_similarity`, `squared_euclidean`
 
-ID → position lookup, similarity metrics, and search come in later milestones.
+Exact top-k search is next (Milestone 4).
 
 ## Requirements
 
