@@ -9,6 +9,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_library(vectordb
     src/vector_store.cpp
     src/flat_vector_store.cpp
+    src/id_index.cpp
+    src/database.cpp
+    src/distance.cpp
 )
 target_include_directories(vectordb
     PUBLIC
@@ -29,6 +32,9 @@ FetchContent_MakeAvailable(googletest)
 add_executable(vector_store_test
     tests/vector_store_test.cpp
     tests/flat_vector_store_test.cpp
+    tests/id_index_test.cpp
+    tests/database_test.cpp
+    tests/distance_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE
