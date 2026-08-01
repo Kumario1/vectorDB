@@ -13,6 +13,7 @@ add_library(vectordb
     src/database.cpp
     src/distance.cpp
     src/serializer.cpp
+    src/wal.cpp
 )
 target_include_directories(vectordb
     PUBLIC
@@ -38,6 +39,7 @@ add_executable(vector_store_test
     tests/distance_test.cpp
     tests/search_test.cpp
     tests/persistence_test.cpp
+    tests/wal_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE
@@ -59,3 +61,4 @@ add_executable(storage_layout_benchmark
 target_link_libraries(storage_layout_benchmark PRIVATE vectordb)
 
 add_executable(format_sandbox tools/format_sandbox.cpp)
+add_executable(wal_sandbox tools/wal_sandbox.cpp)

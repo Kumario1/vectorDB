@@ -15,7 +15,8 @@ flowchart LR
   I --> S[Similarity]
   S --> K[Exact top-k]
   K --> P[Binary persistence]
-  P --> W[WAL — next]
+  P --> W[WAL library]
+  W --> R[Replay / checkpoint — next]
 ```
 
 | Topic | Progress |
@@ -25,8 +26,9 @@ flowchart LR
 | ID index + CRUD | `IdIndex` + `VectorDB` insert/get/update/remove |
 | Similarity | Cosine, dot, squared Euclidean |
 | Exact top-k | Min-heap search · tag `v0.1-in-memory-exact` |
-| Binary persistence | Save/load + checksum · **67** tests green |
-| WAL / crash safety | **Next** |
+| Binary persistence | Save/load + checksum |
+| WAL | `WalWriter` / `WalReader` + sandbox · Insert records · **not** wired to CRUD yet |
+| Replay / checkpoint / crash tests | **Next** |
 
 ```mermaid
 pie title C++ lines by area (~1,918 total)
@@ -356,19 +358,79 @@ for (std::size_t i = 0; i < record_count; ++i) {
 
 **Hard lessons from implementing it:** `bool` isn’t an on-disk type; `fwrite(ptr, size, count)` — size is bytes per item; don’t `strlen` an 8-byte magic; load trusts the **file**, not whatever was already in `db`.
 
-Still missing vs real engines: **WAL / crash safety** (next) — a snapshot alone can tear if the process dies mid-write. SQLite’s [WAL docs](https://www.sqlite.org/wal.html) are the roadmap.
+---
+
+## Write-ahead log (in progress)
+
+**What I learned:** A `.vdb` snapshot is a **photo** of full state; a WAL is a **notebook** of changes since that photo. Studying [SQLite WAL](https://www.sqlite.org/wal.html) and CMU-style recovery: durability comes from append-only log records that hit disk **before** you rely on the main file. On open: load last snapshot, then replay WAL records with `lsn > checkpoint_last_lsn`.
+
+**Database ideas:**
+- **Write-ahead:** append + flush the log, *then* update RAM (and only later rewrite `.vdb`).
+- **LSN:** monotonic id so checkpoint can say “photo includes through N.”
+- **WAL vs snapshot:** WAL = cheap per-op durability; `.vdb` = occasional catch-up so replay stays short.
+- Don’t persist the hash index in the WAL either — replay rebuilds effects on the DB.
+
+```mermaid
+flowchart LR
+  op["insert"] --> wal["append WAL + flush"]
+  wal --> mem["update RAM"]
+  mem --> cp["sometimes checkpoint → .vdb"]
+```
+
+```text
+[ record_length u32 ]  = bytes of (lsn + op + payload + checksum)
+[ lsn           u64 ]
+[ op_type       u32 ]  1=INSERT 2=UPDATE 3=DELETE 4=CHECKPOINT
+[ payload... ]
+[ checksum      u32 ]  // lsn+op+payload only
+```
+
+```cpp
+enum class WalOp : std::uint32_t {
+    Insert = 1, Update = 2, Delete = 3, Checkpoint = 4,
+};
+
+struct WalRecord {
+    std::uint64_t lsn = 0;
+    WalOp op = WalOp::Insert;
+    std::uint64_t id = 0;
+    std::uint32_t dimensions = 0;
+    std::vector<float> values;
+    std::uint64_t checkpoint_lsn = 0;  // Checkpoint only
+};
+```
+
+```cpp
+Status WalWriter::append(WalRecord& rec) {
+    rec.lsn = next_lsn_;
+    // fwrite record_length (not checksummed)
+    // checksum = 0; write lsn, op, id, dims, floats with add_bytes
+    // fwrite checksum; ++next_lsn_
+    ...
+}
+
+Status WalReader::read_next(WalRecord& out, bool& have_record) {
+    // fread length: n==0 → EOF (ok); n!=1 → error
+    // rebuild checksum from body; compare trailing checksum
+    ...
+}
+```
+
+**Hard lessons so far:** `fread`’s **return value** is item count — don’t confuse it with `record_length` stored in the file; each record has its own checksum; `continue` only works inside a loop (not in `read_next`).
+
+**Still to do:** wire log-before-mutate into `VectorDB`, replay on open, checkpoint, crash injection, `fsync`.
 
 ---
 
 ## Repo layout
 
 ```text
-include/vectordb/   public headers
-src/                implementations
-tests/              GoogleTest (67 cases)
-tools/              CLI + format_sandbox
+include/vectordb/   public headers (incl. wal.hpp)
+src/                implementations (incl. wal.cpp)
+tests/              GoogleTest
+tools/              CLI + format_sandbox + wal_sandbox
 benchmarks/         AoS vs SoA scans
-notes/              design + memory-layout log
+notes/              design + memory-layout + wal learning notes
 ```
 
 ---
@@ -384,6 +446,7 @@ ctest --test-dir build --output-on-failure
 ```bash
 ./build/vectordb_cli
 ./build/format_sandbox
+./build/wal_sandbox
 ```
 
 ---
@@ -396,7 +459,8 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-Next up: **WAL / crash safety**. Full roadmap: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
+**WAL remaining stages:** wire mutations → replay on open → checkpoint → crash matrix → `fsync`.  
+Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---
 
