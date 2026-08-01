@@ -6,9 +6,11 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace vectordb {
+
 
 enum class Metric { cosine, dot_product, euclidean };
 
@@ -20,6 +22,7 @@ enum class Status {
     invalid_argument
 };
 
+
 struct SearchResult {
     std::uint64_t id;
     float score;
@@ -29,6 +32,9 @@ class VectorDB {
 public:
     explicit VectorDB(std::size_t dimensions, Metric metric = Metric::cosine);
 
+    Status save(const std::string& path) const;
+    Status load(const std::string& path);
+
     Status insert(std::uint64_t id, std::span<const float> values);
     Status update(std::uint64_t id, std::span<const float> values);
     Status remove(std::uint64_t id);
@@ -36,6 +42,10 @@ public:
     std::optional<std::span<const float>> get(std::uint64_t id) const;
     std::vector<SearchResult> search(std::span<const float> query, std::size_t k) const;
     float score_pair(std::span<const float> query, std::span<const float> candidate) const;
+    std::size_t physical_size() const noexcept;
+    std::uint64_t id_at(std::size_t index) const noexcept;
+    bool is_deleted_at(std::size_t index) const noexcept;
+    std::span<const float> values_at(std::size_t index) const noexcept;
 
     std::size_t dimensions() const noexcept;
     Metric metric() const noexcept;

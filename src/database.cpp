@@ -76,6 +76,23 @@ std::size_t VectorDB::size() const noexcept {
     return active_count_;
 }
 
+std::size_t VectorDB::physical_size() const noexcept {
+    // return store_.size()
+    return store_.size();
+}
+
+std::uint64_t VectorDB::id_at(std::size_t index) const noexcept {
+    return store_.id_at(index);
+}
+
+bool VectorDB::is_deleted_at(std::size_t index) const noexcept {
+    return store_.is_deleted(index);
+}
+
+std::span<const float> VectorDB::values_at(std::size_t index) const noexcept {
+    return store_.values_at(index);
+}
+
 float VectorDB::score_pair(std::span<const float> query, std::span<const float> candidate) const {
     assert(query.size() == candidate.size());
     switch (metric_) {

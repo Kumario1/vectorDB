@@ -12,6 +12,7 @@ add_library(vectordb
     src/id_index.cpp
     src/database.cpp
     src/distance.cpp
+    src/serializer.cpp
 )
 target_include_directories(vectordb
     PUBLIC
@@ -55,3 +56,5 @@ add_executable(storage_layout_benchmark
     benchmarks/storage_layout_benchmark.cpp
 )
 target_link_libraries(storage_layout_benchmark PRIVATE vectordb)
+
+add_executable(format_sandbox tools/format_sandbox.cpp)
