@@ -37,6 +37,7 @@ add_executable(vector_store_test
     tests/database_test.cpp
     tests/distance_test.cpp
     tests/search_test.cpp
+    tests/persistence_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE

@@ -2,6 +2,8 @@
 
 #include <cstdio>
 #include <span>
+#include <cstring>   // memcmp
+#include <vector>
 
 namespace vectordb {
 
@@ -94,14 +96,145 @@ void write_payload(FILE* file, const VectorDB& db, std::uint32_t& checksum) {
 }
 
 
-Status save_database(const VectorDB& /*db*/, const std::string& /*path*/) {
-    // stub for now — real write comes in 5.2+
-    return Status::invalid_argument;
+Status save_database(const VectorDB& db, const std::string& path) {
+    FILE* file = std::fopen(path.c_str(), "wb");
+    if (!file) {
+        return Status::invalid_argument;  // open failed; io_error later if we add it
+    }
+
+    std::uint32_t checksum = 0;
+    write_header(file, db, checksum);
+    write_payload(file, db, checksum);
+    // trailing checksum — do not fold these bytes into the sum
+    std::fwrite(&checksum, 4, 1, file);
+    std::fclose(file);
+    return Status::ok;
 }
 
-Status load_database(const std::string& /*path*/, VectorDB& /*out*/) {
+Status load_database(const std::string& path, VectorDB& db) {
     // stub for now
-    return Status::invalid_argument;
+    FILE* file = std::fopen(path.c_str(), "rb");
+    if (!file){
+        return Status::invalid_argument;
+    }
+
+    std::uint32_t checksum = 0;
+    //read header
+    char magic[8];
+    size_t got = std::fread(magic, 1, 8, file);
+    if (got != 8){
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    if (std::memcmp(magic, kMagic, 8) != 0){
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, magic, 8);
+
+    std::uint32_t version = 0;
+    got = std::fread(&version, 4, 1, file);
+    if (got != 1) {
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    if (version != kFormatVersion) {
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, &version, 4);
+
+    std::uint32_t dimensions = 0;
+    got = std::fread(&dimensions, 4, 1, file);
+    if (got != 1 || dimensions == 0) {
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, &dimensions, 4);
+
+    std::uint64_t record_count = 0;
+    got = std::fread(&record_count, 8, 1, file);
+    if (got != 1) {
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, &record_count, 8);
+
+    std::uint64_t active = 0;
+    got = std::fread(&active, 8, 1, file);
+    if (got != 1 || active > record_count) {
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, &active, 8);
+
+    std::uint32_t metric = 0;
+    got = std::fread(&metric, 4, 1, file);
+    if (got != 1 || metric > 2) {
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, &metric, 4);
+
+    //read payload
+
+    //Section 1: all ids
+    std::vector<std::uint64_t> ids(record_count);
+    got = std::fread(ids.data(), 8, record_count, file);
+    if (got != record_count){
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, ids.data(), record_count * 8);
+    
+    //section 2: all tombstone flags
+    std::vector<std::uint8_t> deleted(record_count);
+    got = std::fread(deleted.data(), 1, record_count, file);
+    if (got != record_count){
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    add_bytes(checksum, deleted.data(), record_count);
+
+    //section 3: all float components
+    std::vector<float> values(record_count * dimensions);
+    got = std::fread(values.data(), 4, record_count * dimensions, file);
+    if (got != record_count * dimensions){
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+
+    add_bytes(checksum, values.data(), record_count * dimensions * 4);
+    
+    //read trailing checksum
+    std::uint32_t trailing_checksum = 0;
+    got = std::fread(&trailing_checksum, 4, 1, file);
+    if (got != 1 ){
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+    if (trailing_checksum != checksum){
+        std::fclose(file);
+        return Status::invalid_argument;
+    }
+
+    //build database
+    db = VectorDB(dimensions, metric_from_u32(metric));
+
+    for (std::size_t i = 0; i < record_count; ++i){
+        std::span<const float> vals(values.data() + i * dimensions, dimensions);
+        db.insert(ids[i], vals);
+        if (deleted[i]){
+            db.remove(ids[i]);
+        }
+    }
+
+    std::fclose(file);
+    return Status::ok;
+    
+
+
+
 }
 
 }  // namespace vectordb
