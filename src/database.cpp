@@ -1,5 +1,6 @@
 #include "vectordb/database.hpp"
 #include "vectordb/distance.hpp"
+#include "vectordb/serializer.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -10,6 +11,14 @@ namespace vectordb {
 
 VectorDB::VectorDB(std::size_t dimensions, Metric metric)
     : metric_(metric), store_(dimensions) {}
+
+Status VectorDB::save(const std::string& path) const {
+    return save_database(*this, path);
+}
+
+Status VectorDB::load(const std::string& path) {
+    return load_database(path, *this);
+}
 
 Status VectorDB::insert(std::uint64_t id, std::span<const float> values) {
     if (values.size() != store_.dimensions()) {return Status::dimension_mismatch;}

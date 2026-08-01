@@ -17,7 +17,8 @@ This is a **learning project**, not a production competitor to Faiss/Milvus/etc.
 | 2 — ID index + CRUD | Done | `unordered_map` (skipped custom open-addressing for now) |
 | 3 — Distance metrics | Done | Cosine, dot, squared Euclidean |
 | 4 — Exact top-k search | Done | Tag **`v0.1-in-memory-exact`** |
-| 5 — Binary persistence | In progress | Format sandbox done; `write_header` + SoA `write_payload` done; `save_database` / `load_database` next |
+| 5 — Binary persistence | Done | `save_database` / `load_database` + 14 persistence tests |
+| 6 — WAL / crash safety | Next | See curriculum guide |
 
 ---
 
@@ -198,17 +199,35 @@ return best-first
 
 ---
 
-### Milestone 5 — Persistence (in progress)
+### Milestone 5 — Persistence (done)
 
-**Learning so far:**
+**Learned:**
 
 - A file is a **contract**, not a dumped C++ struct (padding/endianness)  
-- **Magic** + **version** + explicit field writes  
+- **Magic** + **version** first — sizes come from the spec, not from the file discovering itself  
 - SoA on disk matches FlatVectorStore: header → ids → deleted → floats → checksum  
-- `fwrite(ptr, elem_size, count, file)`; scalars need `&field`  
-- Checksum = sum of bytes **before** the checksum field; `add_bytes` must take `uint32_t&`  
-- `record_count` = physical size (tombstones included); `active_count` = live rows  
-- Rebuild `IdIndex` on load — don’t save the hash table  
+- `fread`/`fwrite(ptr, size, count, file)` — size is bytes-per-item, count is how many items  
+- Checksum = sum of bytes **before** the checksum field; never fold the trailing checksum into itself  
+- `record_count` = physical size (tombstones included); rebuild `IdIndex` on load — don’t save the hash table  
+- Load stages: open → header → payload buffers → verify checksum → **then** rebuild memory  
+
+```mermaid
+flowchart LR
+  subgraph Save
+    M1["memory DB"] --> W1["write header"]
+    W1 --> W2["write ids / deleted / floats"]
+    W2 --> W3["write checksum"]
+    W3 --> F["file.vdb"]
+  end
+
+  subgraph Load
+    F2["file.vdb"] --> R1["read + validate header"]
+    R1 --> R2["read payload buffers"]
+    R2 --> R3["verify checksum"]
+    R3 --> R4["rebuild store + IdIndex"]
+    R4 --> M2["memory DB"]
+  end
+```
 
 **File layout v1** (`n` = `record_count`, `d` = `dimensions`):
 
@@ -229,26 +248,65 @@ offset  size          field
          4            checksum (u32) = byte sum of everything above
 ```
 
-Three separate sections, mirroring `FlatVectorStore`'s SoA memory layout — not one interleaved record per row:
-
 ```text
 in memory   ids_ | deleted_ | values_
-on disk     ids[]  deleted[]  values[]   ← same shape, so save/load is a straight copy
+on disk     ids[]  deleted[]  values[]   ← same SoA shape
 ```
 
-**Two bugs worth remembering** (both hit while writing `write_payload`):
+**Bugs worth remembering:**
 
-1. `sizeof(bool)` is **not guaranteed to be 1** and isn't a stable on-disk type. Convert first:
-   `std::uint8_t d = deleted ? 1 : 0;` then `fwrite(&d, 1, 1, file)`.
-2. `fwrite(ptr, size, count, file)` — `fwrite(&d, 1, 2, file)` writes **two** bytes from a one-byte
-   object. The checksum must cover exactly the bytes written, so `add_bytes(..., &d, 1)` too.
+1. `sizeof(bool)` is not a stable on-disk type → write `uint8_t` 0/1.  
+2. `fwrite(&d, 1, 2, file)` writes **two** items — use count `1`.  
+3. `strlen(magic)` is wrong for an 8-byte stamp with no `'\0'` — check `fread`’s return + `memcmp`.  
+4. Load does **not** compare the file against an existing DB — the file is the source of truth.
 
-**Sandbox experiments:** `tools/format_sandbox.cpp` (write/read header, payload, checksum by hand).
+**Tests:** size formula, magic, round-trip (empty / vectors+search / tombstones / metric), missing file, bad magic, truncated, bad checksum, wrong version.
+
+**Sandbox:** `tools/format_sandbox.cpp`
 
 **Resources:**
 
 - [SQLite database file format](https://www.sqlite.org/fileformat.html) — magic, header, versions (skim §1 / §1.3)  
 - [cppreference: fixed-width integers](https://en.cppreference.com/w/cpp/types/integer)  
+
+---
+
+## Project proof (snapshot)
+
+Evidence that this is a real, growing codebase — not a stub README.
+
+| Area | Lines | Files |
+|------|------:|------:|
+| `include/vectordb/` | ~199 | 6 |
+| `src/` | ~584 | 6 |
+| `tests/` | ~866 | 7 |
+| `tools/` | ~159 | 2 |
+| `benchmarks/` | ~110 | 1 |
+| `notes/` | ~142 | 2 |
+| **C++ total (`.hpp` + `.cpp`)** | **~1,918** | **22** |
+
+| Signal | Value |
+|--------|------:|
+| GoogleTest cases | **67** (all green) |
+| Persistence tests | **14** |
+| Milestones complete | **0 → 5** |
+| Release tag | `v0.1-in-memory-exact` |
+
+```mermaid
+pie title Approx. C++ lines by area
+  "tests" : 866
+  "src" : 584
+  "include" : 199
+  "tools" : 159
+  "benchmarks" : 110
+```
+
+Recount anytime:
+
+```bash
+find include src tests tools benchmarks -name '*.hpp' -o -name '*.cpp' | xargs wc -l
+ctest --test-dir build --output-on-failure
+```
 
 ---
 
