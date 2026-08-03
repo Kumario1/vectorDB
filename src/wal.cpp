@@ -23,6 +23,12 @@ std::uint32_t insert_payload_bytes(std::uint32_t dimensions) {
 
 WalWriter::WalWriter(std::string path) : path_(std::move(path)) {}
 
+Status WalWriter::set_next_lsn(std::uint64_t lsn) {
+    if (lsn < next_lsn_) {return Status::invalid_argument;}
+    next_lsn_ = lsn;
+    return Status::ok;
+}
+
 WalWriter::~WalWriter() {
     // TODO: if file_ != nullptr, fclose and set file_ = nullptr
     if (file_ != nullptr) {
@@ -64,62 +70,106 @@ Status WalWriter::append(WalRecord& rec) {
         return Status::invalid_argument;
     }
 
-    // v1: only Insert for now
-    if (rec.op != WalOp::Insert) {
-        return Status::invalid_argument;
-    }
-    if (rec.values.size() != rec.dimensions) {
-        return Status::dimension_mismatch;
-    }
-
     // TODO A: assign LSN
     //   rec.lsn = next_lsn_;
     rec.lsn = next_lsn_;
 
-    // TODO B: compute sizes (same as sandbox)
-    //   payload_bytes = insert_payload_bytes(rec.dimensions);
-    //   record_length = 8 + 4 + payload_bytes + 4;  // lsn + op + payload + checksum
-    std::uint32_t payload_bytes = insert_payload_bytes(rec.dimensions);
-    std::uint32_t record_length = 8 + 4 + payload_bytes + 4;  // lsn + op + payload + checksum
-    // TODO C: write record_length (u32) — do NOT add_bytes
-    if (std::fwrite(&record_length, 4, 1, file_) != 1) {
-        return Status::invalid_argument;
-    }
+    //build a switch statement to handle the different operations
+    switch (rec.op) {
+        case WalOp::Insert:
+        case WalOp::Update: {
+            if (rec.values.size() != rec.dimensions) {
+                return Status::dimension_mismatch;
+            }
+            if (rec.dimensions == 0) {
+                return Status::invalid_argument;
+            }
 
-    // TODO D: checksum = 0
-    std::uint32_t checksum = 0;
-    //   write lsn (u64); add_bytes
-    if (std::fwrite(&rec.lsn, 8, 1, file_) != 1) {
-        return Status::invalid_argument;
+            //write the record length
+            std::uint32_t record_length = 8 + 4 + insert_payload_bytes(rec.dimensions) + 4;
+            if (std::fwrite(&record_length, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+
+            std::uint32_t checksum = 0;
+
+            //   write lsn (u64); add_bytes
+            if (std::fwrite(&rec.lsn, 8, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.lsn, 8);
+
+            //   write op as uint32_t (static_cast); add_bytes
+            if (std::fwrite(&rec.op, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.op, 4);
+
+            //   write id (u64); add_bytes
+            if (std::fwrite(&rec.id, 8, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.id, 8);
+
+            //   write dimensions (u32); add_bytes
+            if (std::fwrite(&rec.dimensions, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.dimensions, 4);
+
+            //   write values.data() floats; add_bytes for dimensions * sizeof(float)
+            if (std::fwrite(rec.values.data(), sizeof(float), rec.dimensions, file_) != rec.dimensions) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, rec.values.data(), sizeof(float) * rec.dimensions);
+
+            // TODO E: write checksum (u32) — do NOT add_bytes
+            if (std::fwrite(&checksum, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+
+            // TODO F: ++next_lsn_; return Status::ok
+            ++next_lsn_;
+            return Status::ok;
+        }
+        case WalOp::Delete: {
+            // Delete payload is only id — id 0 is allowed
+            //write the record length
+            std::uint32_t record_length = 8 + 4 + 8 + 4;
+            if (std::fwrite(&record_length, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+
+            std::uint32_t checksum = 0;
+            //write the lsn to the file
+            if (std::fwrite(&rec.lsn, 8, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.lsn, 8);
+            //write the op to the file
+            if (std::fwrite(&rec.op, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.op, 4);
+            if (std::fwrite(&rec.id, 8, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.id, 8);
+            //write the checksum
+            if (std::fwrite(&checksum, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            //increment the next lsn
+            ++next_lsn_;
+            return Status::ok;
+        }
+        case WalOp::Checkpoint: {
+            return Status::invalid_argument;
+        }
+        default: {
+            return Status::invalid_argument;
+        }
     }
-    add_bytes(checksum, &rec.lsn, 8);
-    //   write op as uint32_t (static_cast); add_bytes
-    if (std::fwrite(&rec.op, 4, 1, file_) != 1) {
-        return Status::invalid_argument;
-    }
-    add_bytes(checksum, &rec.op, 4);
-    //   write id (u64); add_bytes
-    if (std::fwrite(&rec.id, 8, 1, file_) != 1) {
-        return Status::invalid_argument;
-    }
-    add_bytes(checksum, &rec.id, 8);
-    //   write dimensions (u32); add_bytes
-    if (std::fwrite(&rec.dimensions, 4, 1, file_) != 1) {
-        return Status::invalid_argument;
-    }
-    add_bytes(checksum, &rec.dimensions, 4);
-    //   write values.data() floats; add_bytes for dimensions * sizeof(float)
-    if (std::fwrite(rec.values.data(), sizeof(float), rec.dimensions, file_) != rec.dimensions) {
-        return Status::invalid_argument;
-    }
-    add_bytes(checksum, rec.values.data(), sizeof(float) * rec.dimensions);
-    // TODO E: write checksum (u32) — do NOT add_bytes
-    if (std::fwrite(&checksum, 4, 1, file_) != 1) {
-        return Status::invalid_argument;
-    }
-    // TODO F: ++next_lsn_; return Status::ok
-    next_lsn_++;
-    return Status::ok;
 }
 
 // ----------------- WalReader -----------------

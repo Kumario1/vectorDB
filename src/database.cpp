@@ -1,13 +1,34 @@
 #include "vectordb/database.hpp"
 #include "vectordb/distance.hpp"
 #include "vectordb/serializer.hpp"
+#include "vectordb/wal.hpp"
+#include <memory>
 
 #include <algorithm>
+#include <fstream>
+#include <filesystem>
 #include <cassert>
 #include <queue>
 #include <span>
 
 namespace vectordb {
+
+
+Status VectorDB::enable_wal(const std::string& path) {
+    auto w = std::make_unique<WalWriter>(path);
+    Status status = w->open();
+    if (status != Status::ok) {
+        return status;
+    }
+    wal_ = std::move(w);
+    wal_path_ = path;
+    return Status::ok;
+}
+
+VectorDB::~VectorDB() = default;
+
+VectorDB::VectorDB(VectorDB&&) noexcept = default;
+VectorDB& VectorDB::operator=(VectorDB&&) noexcept = default;
 
 VectorDB::VectorDB(std::size_t dimensions, Metric metric)
     : metric_(metric), store_(dimensions) {}
@@ -20,9 +41,88 @@ Status VectorDB::load(const std::string& path) {
     return load_database(path, *this);
 }
 
+Status VectorDB::open(const std::string& snapshot_path, const std::string& wal_path) {
+    uint64_t out_max_lsn = 0;
+    if (!snapshot_path.empty() && std::filesystem::exists(snapshot_path)) {
+        Status st = load(snapshot_path);
+        if (st != Status::ok) {return st;}
+    }
+    if (!wal_path.empty()) {
+        Status st = replay_wal(wal_path, out_max_lsn);
+        if (st != Status::ok) {return st;}
+        st = enable_wal(wal_path);
+        if (st != Status::ok) {return st;}
+        wal_->set_next_lsn(out_max_lsn);
+    }
+    return Status::ok;
+}
+
+Status VectorDB::checkpoint(const std::string& snapshot_path) {
+    if (wal_){
+        Status st = save(snapshot_path);
+        if (st != Status::ok) {return st;}
+        //get wal path from wal_
+        std::string wal_path = wal_path_;
+        
+        //close the writer
+        wal_.reset();
+
+        //recreate wal file
+        std::ofstream ofs(wal_path, std::ios::trunc);
+        ofs.close();
+
+        //reopen the writer
+        st = enable_wal(wal_path);
+        if (st != Status::ok) {return st;}
+    }
+    return Status::ok;
+}
+
+Status VectorDB::apply_wal_record(const WalRecord& rec) {
+    //apply the record
+    switch (rec.op) {
+        case WalOp::Insert: return insert(rec.id, rec.values);
+        case WalOp::Update: return update(rec.id, rec.values);
+        case WalOp::Delete: return remove(rec.id);
+        case WalOp::Checkpoint: return Status::ok;
+        default: return Status::invalid_argument;
+    }
+}
+
+Status VectorDB::replay_wal(const std::string& wal_path, uint64_t& out_max_lsn) {
+    auto w = std::make_unique<WalReader>(wal_path);
+    Status st = w->open();
+    if (st != Status::ok) {return st;}
+    while (true) {
+        WalRecord rec;
+        bool have_record = false;
+        st = w->read_next(rec, have_record);
+        //if fails, return the status
+        if (st != Status::ok) {return st;}
+        if (!have_record) {break;}
+        //use apply_wal_record to apply the record
+        st = apply_wal_record(rec);
+        if (st != Status::ok) {return st;}
+        if (rec.lsn > out_max_lsn) {out_max_lsn = rec.lsn;}
+    }
+    out_max_lsn++;
+    return Status::ok;
+}
+
 Status VectorDB::insert(std::uint64_t id, std::span<const float> values) {
     if (values.size() != store_.dimensions()) {return Status::dimension_mismatch;}
     if (index_.find(id) != std::nullopt) {return Status::duplicate_id;}
+    if (wal_){
+        WalRecord rec;
+        rec.op = WalOp::Insert;
+        rec.id = id;
+        rec.dimensions = store_.dimensions();
+        rec.values.assign(values.begin(), values.end());
+        Status st = wal_->append(rec);
+        if (st != Status::ok) {return st;}
+        st = wal_->flush();
+        if (st != Status::ok) {return st;}
+    }
     auto pos = store_.append(id, values);
     if (!pos) {return Status::dimension_mismatch;}
     index_.insert(id, *pos);
@@ -39,6 +139,17 @@ Status VectorDB::update(std::uint64_t id, std::span<const float> values) {
     if (values.size() != store_.dimensions()) {return Status::dimension_mismatch;}
     auto pos = index_.find(id);
     if (!pos) {return Status::not_found;}
+    if (wal_){
+        WalRecord rec;
+        rec.op = WalOp::Update;
+        rec.id = id;
+        rec.dimensions = store_.dimensions();
+        rec.values.assign(values.begin(), values.end());
+        Status st = wal_->append(rec);
+        if (st != Status::ok) {return st;}
+        st = wal_->flush();
+        if (st != Status::ok) {return st;}
+    }
     if (store_.is_deleted(*pos)) {return Status::not_found;}
     auto dest = store_.values_at(*pos);
     std::copy(values.begin(), values.end(), dest.begin());
@@ -53,6 +164,15 @@ Status VectorDB::remove(std::uint64_t id) {
     // 5) return ok
     auto pos = index_.find(id);
     if (!pos) {return Status::not_found;}
+    if (wal_){
+        WalRecord rec;
+        rec.op = WalOp::Delete;
+        rec.id = id;
+        Status st = wal_->append(rec);
+        if (st != Status::ok) {return st;}
+        st = wal_->flush();
+        if (st != Status::ok) {return st;}
+    }
     if (store_.is_deleted(*pos)) {return Status::not_found;}
     store_.set_deleted(*pos, true);
     index_.erase(id);
