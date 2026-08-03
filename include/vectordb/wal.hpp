@@ -41,10 +41,12 @@ public:
 
     // Open for append ("ab"). Creates file if missing.
     Status open();
+    
 
     // Writes one record. For Insert/Update, values.size() must equal dimensions.
     // Sets rec.lsn to the assigned LSN on success (also returns via record).
     Status append(WalRecord& rec);
+    Status set_next_lsn(std::uint64_t lsn);
 
     Status flush();
 

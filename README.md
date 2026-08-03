@@ -15,8 +15,9 @@ flowchart LR
   I --> S[Similarity]
   S --> K[Exact top-k]
   K --> P[Binary persistence]
-  P --> W[WAL library]
-  W --> R[Replay / checkpoint — next]
+  P --> W[WAL + log-before-mutate]
+  W --> R[open / replay / checkpoint]
+  R --> C[Crash / fsync — next]
 ```
 
 | Topic | Progress |
@@ -27,15 +28,16 @@ flowchart LR
 | Similarity | Cosine, dot, squared Euclidean |
 | Exact top-k | Min-heap search · tag `v0.1-in-memory-exact` |
 | Binary persistence | Save/load + checksum |
-| WAL | `WalWriter` / `WalReader` + sandbox · Insert records · **not** wired to CRUD yet |
-| Replay / checkpoint / crash tests | **Next** |
+| WAL | Writer/reader + log-before-mutate on insert/update/remove |
+| open / replay / checkpoint | Load snapshot → replay WAL → truncate on checkpoint |
+| Crash injection / `fsync` | **Next** |
 
 ```mermaid
-pie title C++ lines by area (~1,918 total)
-  "tests" : 866
-  "src" : 584
-  "include" : 199
-  "tools" : 159
+pie title C++ lines by area (~2,900 total)
+  "tests" : 1137
+  "src" : 997
+  "tools" : 360
+  "include" : 296
   "benchmarks" : 110
 ```
 
@@ -49,33 +51,31 @@ flowchart TB
     insert["insert / update / remove / get"]
     search["search(query, k)"]
     save["save / load"]
+    open["open / checkpoint"]
   end
 
   subgraph Memory["In-memory state"]
     store["FlatVectorStore\n(SoA layout)"]
     index["IdIndex\nid → position"]
     meta["metric_ + active_count_"]
+    walptr["optional WalWriter"]
   end
 
-  subgraph Disk["On-disk file v1"]
-    hdr["Header"]
-    ids["ids[]"]
-    del["deleted[]"]
-    floats["floats[]"]
-    sum["checksum"]
+  subgraph Disk["On disk"]
+    snap[".vdb snapshot"]
+    wallog[".wal append-only log"]
   end
 
+  insert --> walptr
   insert --> index
   insert --> store
-  insert --> meta
   search --> store
-  search --> meta
-  save --> store
-  save --> meta
-  save --> Disk
-  load --> Disk
-  load --> store
-  load --> index
+  save --> snap
+  open --> snap
+  open --> wallog
+  open --> store
+  checkpoint --> snap
+  checkpoint --> wallog
 ```
 
 ---
@@ -360,21 +360,24 @@ for (std::size_t i = 0; i < record_count; ++i) {
 
 ---
 
-## Write-ahead log (in progress)
+## Write-ahead log + recovery
 
-**What I learned:** A `.vdb` snapshot is a **photo** of full state; a WAL is a **notebook** of changes since that photo. Studying [SQLite WAL](https://www.sqlite.org/wal.html) and CMU-style recovery: durability comes from append-only log records that hit disk **before** you rely on the main file. On open: load last snapshot, then replay WAL records with `lsn > checkpoint_last_lsn`.
+**What I learned:** A `.vdb` snapshot is a **photo** of full state; a WAL is a **notebook** of changes since that photo. Studying [SQLite WAL](https://www.sqlite.org/wal.html) and CMU-style recovery: durability comes from append-only log records that hit disk **before** you mutate RAM. On open: load last snapshot (if any), replay every WAL record, then reopen the writer at `max_lsn + 1`. Checkpoint = save photo, close writer, truncate WAL, reopen at LSN 1.
 
 **Database ideas:**
-- **Write-ahead:** append + flush the log, *then* update RAM (and only later rewrite `.vdb`).
-- **LSN:** monotonic id so checkpoint can say “photo includes through N.”
-- **WAL vs snapshot:** WAL = cheap per-op durability; `.vdb` = occasional catch-up so replay stays short.
-- Don’t persist the hash index in the WAL either — replay rebuilds effects on the DB.
+- **Write-ahead:** validate → append WAL → mutate memory (failed ops write nothing).
+- **LSN:** monotonic id so the next writer knows where to continue after replay.
+- **WAL vs snapshot:** WAL = cheap per-op durability; checkpoint keeps replay short.
+- Incomplete types: forward-declare `WalWriter` in `database.hpp` so headers don’t circular-include.
 
 ```mermaid
 flowchart LR
   op["insert"] --> wal["append WAL + flush"]
   wal --> mem["update RAM"]
-  mem --> cp["sometimes checkpoint → .vdb"]
+  mem --> cp["checkpoint → .vdb + truncate WAL"]
+  open["open"] --> snap["load .vdb"]
+  snap --> replay["replay .wal"]
+  replay --> writer["enable_wal @ next LSN"]
 ```
 
 ```text
@@ -386,39 +389,21 @@ flowchart LR
 ```
 
 ```cpp
-enum class WalOp : std::uint32_t {
-    Insert = 1, Update = 2, Delete = 3, Checkpoint = 4,
-};
-
-struct WalRecord {
-    std::uint64_t lsn = 0;
-    WalOp op = WalOp::Insert;
-    std::uint64_t id = 0;
-    std::uint32_t dimensions = 0;
-    std::vector<float> values;
-    std::uint64_t checkpoint_lsn = 0;  // Checkpoint only
-};
-```
-
-```cpp
-Status WalWriter::append(WalRecord& rec) {
-    rec.lsn = next_lsn_;
-    // fwrite record_length (not checksummed)
-    // checksum = 0; write lsn, op, id, dims, floats with add_bytes
-    // fwrite checksum; ++next_lsn_
-    ...
+Status VectorDB::open(const std::string& snapshot_path,
+                      const std::string& wal_path) {
+    // if snapshot exists → load()
+    // replay_wal → out_max_lsn = max + 1
+    // enable_wal(wal_path); wal_->set_next_lsn(out_max_lsn)
 }
 
-Status WalReader::read_next(WalRecord& out, bool& have_record) {
-    // fread length: n==0 → EOF (ok); n!=1 → error
-    // rebuild checksum from body; compare trailing checksum
-    ...
+Status VectorDB::checkpoint(const std::string& snapshot_path) {
+    // save(snapshot); wal_.reset(); truncate wal_path_; enable_wal(...)
 }
 ```
 
-**Hard lessons so far:** `fread`’s **return value** is item count — don’t confuse it with `record_length` stored in the file; each record has its own checksum; `continue` only works inside a loop (not in `read_next`).
+**Hard lessons so far:** `fread` return value ≠ `record_length`; close the writer (`wal_.reset()`) *before* truncating the file; don’t call `~WalWriter()` by hand; store `wal_path_` because the writer doesn’t expose `path()`.
 
-**Still to do:** wire log-before-mutate into `VectorDB`, replay on open, checkpoint, crash injection, `fsync`.
+**Still to do:** crash injection, durable `fsync`, optional CHECKPOINT records in the log.
 
 ---
 
@@ -459,7 +444,7 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**WAL remaining stages:** wire mutations → replay on open → checkpoint → crash matrix → `fsync`.  
+**WAL remaining stages:** crash matrix → durable `fsync` → optional CHECKPOINT log records.  
 Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---
