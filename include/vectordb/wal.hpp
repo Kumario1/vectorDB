@@ -48,6 +48,8 @@ public:
     Status append(WalRecord& rec);
     Status set_next_lsn(std::uint64_t lsn);
 
+    // fflush + fsync: durable across process crash after success.
+    // Power loss / controller caches are out of scope.
     Status flush();
 
     std::uint64_t next_lsn() const noexcept { return next_lsn_; }

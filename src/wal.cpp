@@ -1,6 +1,7 @@
 #include "vectordb/wal.hpp"
 
 #include <cstring>
+#include <unistd.h>
 
 namespace vectordb {
 namespace {
@@ -55,11 +56,13 @@ Status WalWriter::open() {
 Status WalWriter::flush() {
     // TODO: if !file_ → invalid_argument
     //       fflush(file_); return ok
-    // (fsync later)
     if (file_ == nullptr) {
         return Status::invalid_argument;
     }
     if (std::fflush(file_) != 0) {
+        return Status::invalid_argument;
+    }
+    if (fsync(fileno(file_)) != 0) {
         return Status::invalid_argument;
     }
     return Status::ok;
