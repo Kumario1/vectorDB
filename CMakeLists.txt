@@ -14,6 +14,7 @@ add_library(vectordb
     src/distance.cpp
     src/serializer.cpp
     src/wal.cpp
+    src/crash.cpp
 )
 target_include_directories(vectordb
     PUBLIC
