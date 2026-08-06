@@ -78,11 +78,23 @@ Status VectorDB::checkpoint(const std::string& snapshot_path) {
 }
 
 Status VectorDB::apply_wal_record(const WalRecord& rec) {
-    //apply the record
+    // Replay must be idempotent: snapshot + untruncated WAL can re-apply
+    // ops already reflected in the loaded .vdb.
     switch (rec.op) {
-        case WalOp::Insert: return insert(rec.id, rec.values);
-        case WalOp::Update: return update(rec.id, rec.values);
-        case WalOp::Delete: return remove(rec.id);
+        case WalOp::Insert: {
+            Status st = insert(rec.id, rec.values);
+            return (st == Status::duplicate_id) ? Status::ok : st;
+        }
+        case WalOp::Update: {
+            Status st = update(rec.id, rec.values);
+            if (st != Status::not_found) {return st;}
+            st = insert(rec.id, rec.values);
+            return (st == Status::duplicate_id) ? Status::ok : st;
+        }
+        case WalOp::Delete: {
+            Status st = remove(rec.id);
+            return (st == Status::not_found) ? Status::ok : st;
+        }
         case WalOp::Checkpoint: return Status::ok;
         default: return Status::invalid_argument;
     }
