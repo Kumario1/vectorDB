@@ -1,4 +1,5 @@
 #include "vectordb/database.hpp"
+#include "vectordb/crash.hpp"
 #include "vectordb/distance.hpp"
 #include "vectordb/serializer.hpp"
 #include "vectordb/wal.hpp"
@@ -61,17 +62,15 @@ Status VectorDB::checkpoint(const std::string& snapshot_path) {
     if (wal_){
         Status st = save(snapshot_path);
         if (st != Status::ok) {return st;}
-        //get wal path from wal_
-        std::string wal_path = wal_path_;
-        
-        //close the writer
-        wal_.reset();
+        maybe_crash(CrashPoint::AfterCheckpointSnapshot);
 
-        //recreate wal file
+        std::string wal_path = wal_path_;
+        wal_.reset();
+        maybe_crash(CrashPoint::AfterCheckpointBeforeTruncateWal);
+
         std::ofstream ofs(wal_path, std::ios::trunc);
         ofs.close();
 
-        //reopen the writer
         st = enable_wal(wal_path);
         if (st != Status::ok) {return st;}
     }
@@ -118,15 +117,19 @@ Status VectorDB::insert(std::uint64_t id, std::span<const float> values) {
         rec.id = id;
         rec.dimensions = store_.dimensions();
         rec.values.assign(values.begin(), values.end());
+        maybe_crash(CrashPoint::BeforeWalAppend);
         Status st = wal_->append(rec);
         if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalAppendBeforeFlush);
         st = wal_->flush();
         if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalFlush);
     }
     auto pos = store_.append(id, values);
     if (!pos) {return Status::dimension_mismatch;}
     index_.insert(id, *pos);
     ++active_count_;
+    maybe_crash(CrashPoint::AfterMemoryApply);
     return Status::ok;
 }
 
@@ -145,14 +148,18 @@ Status VectorDB::update(std::uint64_t id, std::span<const float> values) {
         rec.id = id;
         rec.dimensions = store_.dimensions();
         rec.values.assign(values.begin(), values.end());
+        maybe_crash(CrashPoint::BeforeWalAppend);
         Status st = wal_->append(rec);
         if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalAppendBeforeFlush);
         st = wal_->flush();
         if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalFlush);
     }
     if (store_.is_deleted(*pos)) {return Status::not_found;}
     auto dest = store_.values_at(*pos);
     std::copy(values.begin(), values.end(), dest.begin());
+    maybe_crash(CrashPoint::AfterMemoryApply);
     return Status::ok;
 }
 
@@ -168,15 +175,19 @@ Status VectorDB::remove(std::uint64_t id) {
         WalRecord rec;
         rec.op = WalOp::Delete;
         rec.id = id;
+        maybe_crash(CrashPoint::BeforeWalAppend);
         Status st = wal_->append(rec);
         if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalAppendBeforeFlush);
         st = wal_->flush();
         if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalFlush);
     }
     if (store_.is_deleted(*pos)) {return Status::not_found;}
     store_.set_deleted(*pos, true);
     index_.erase(id);
     --active_count_;
+    maybe_crash(CrashPoint::AfterMemoryApply);
     return Status::ok;
 }
 
