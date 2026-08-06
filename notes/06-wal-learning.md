@@ -4,7 +4,7 @@ We already have **snapshot persistence** (`save_database` / `load_database`). Th
 
 This note is the slow path — same style as Milestone 5 (ideas → tiny experiments → real code → crash tests). Do **one stage at a time**. Do not jump to crash injection before a clean append/replay works.
 
-Full curriculum blurb: [`README_VectorDB_From_Scratch.md`](../README_VectorDB_From_Scratch.md) (Milestone 6).
+Full curriculum blurb: `[README_VectorDB_From_Scratch.md](../README_VectorDB_From_Scratch.md)` (Milestone 6).
 
 ---
 
@@ -29,28 +29,34 @@ Hint: if the snapshot is new but the log never recorded the op, or the snapshot 
 
 ---
 
+
+
 ## Vocabulary (learn these first)
 
-| Term | Meaning for us |
-|------|----------------|
-| **WAL** | Append-only file of intended changes |
-| **LSN** | Log sequence number — monotonic id per record (`1, 2, 3, …`) |
-| **Atomicity** | An operation fully happens or not at all (from the user’s view) |
-| **Durability** | Once we say “committed,” it survives process death |
-| **Replay** | On open: read WAL records and re-apply committed ones |
-| **Idempotence** | Re-applying the same committed record twice must not break the DB |
-| **Checkpoint** | Write a fresh `.vdb` snapshot so we can truncate/forget old WAL |
-| **fsync** | Ask the OS to push file data to stable storage (not just page cache) |
+
+| Term            | Meaning for us                                                       |
+| --------------- | -------------------------------------------------------------------- |
+| **WAL**         | Append-only file of intended changes                                 |
+| **LSN**         | Log sequence number — monotonic id per record (`1, 2, 3, …`)         |
+| **Atomicity**   | An operation fully happens or not at all (from the user’s view)      |
+| **Durability**  | Once we say “committed,” it survives process death                   |
+| **Replay**      | On open: read WAL records and re-apply committed ones                |
+| **Idempotence** | Re-applying the same committed record twice must not break the DB    |
+| **Checkpoint**  | Write a fresh `.vdb` snapshot so we can truncate/forget old WAL      |
+| **fsync**       | Ask the OS to push file data to stable storage (not just page cache) |
+
 
 **Resources (read in order, skim not binge):**
 
-1. [SQLite: Write-Ahead Logging](https://www.sqlite.org/wal.html) — why a separate log, checkpoints  
-2. [CMU 15-445](https://15445.courses.cs.cmu.edu/) — recovery / logging lectures (any year)  
-3. Optional: ARIES overview later; we start simpler than full ARIES  
+1. [SQLite: Write-Ahead Logging](https://www.sqlite.org/wal.html) — why a separate log, checkpoints
+2. [CMU 15-445](https://15445.courses.cs.cmu.edu/) — recovery / logging lectures (any year)
+3. Optional: ARIES overview later; we start simpler than full ARIES
 
 **Checkpoint before Stage 0:** write 5–10 lines in this file or a scratch note defining WAL, LSN, checkpoint, and fsync in your words.
 
 ---
+
+
 
 ## How it fits our VectorDB
 
@@ -68,9 +74,13 @@ flowchart TB
   replay --> ready["ready for queries"]
 ```
 
+
+
 We **keep** the existing snapshot format. WAL is an extra file (e.g. `data/db.wal`) beside `data/db.vdb`.
 
 ---
+
+
 
 ## Suggested record format (decide, then freeze)
 
@@ -86,37 +96,45 @@ Same lesson as `.vdb`: sizes come from a **contract**, not from guessing.
 
 **Payload sketches:**
 
-| op | Payload idea |
-|----|----------------|
+
+| op              | Payload idea                                    |
+| --------------- | ----------------------------------------------- |
 | INSERT / UPDATE | `id (u64)` + `dims` floats (or rely on DB dims) |
-| DELETE | `id (u64)` |
-| COMMIT | maybe empty, or `commit_lsn` |
-| CHECKPOINT | path or snapshot generation / last included LSN |
+| DELETE          | `id (u64)`                                      |
+| COMMIT          | maybe empty, or `commit_lsn`                    |
+| CHECKPOINT      | path or snapshot generation / last included LSN |
+
 
 Start simple: **one user op = one WAL record that is already “the commit”** (no separate multi-record transaction yet). Add an explicit COMMIT type only if you want to practice the idea.
 
 ---
 
+
+
 ## Learning stages (do in order)
+
+
 
 ### Stage 0 — Mental model only (no code)
 
 **Goals**
 
 - Explain the 5-step single-op protocol out loud  
-- Draw: memory vs `.vdb` vs `.wal` after insert, after crash mid-snapshot, after crash after WAL flush  
+- Draw: memory vs `.vdb` vs `.wal` after insert, after crash mid-snapshot, after crash after WAL flush
 
 **Protocol for one insert:**
 
-1. Append INSERT record to WAL  
-2. Flush WAL  
-3. Apply insert in memory  
-4. (Optional later) write COMMIT if you use separate commits  
-5. Periodically checkpoint: `save_database` + record CHECKPOINT + truncate WAL  
+1. Append INSERT record to WAL
+2. Flush WAL
+3. Apply insert in memory
+4. (Optional later) write COMMIT if you use separate commits
+5. Periodically checkpoint: `save_database` + record CHECKPOINT + truncate WAL
 
 **Done when:** you can answer the reflection question above without looking it up.
 
 ---
+
+
 
 ### Stage 1 — WAL sandbox (like `format_sandbox`)
 
@@ -124,19 +142,21 @@ Start simple: **one user op = one WAL record that is already “the commit”** 
 
 **Build:** `tools/wal_sandbox.cpp` (or similar)
 
-1. Open/create a file `"wb"` / `"ab"`  
-2. Write one handmade record (fixed LSN=1, op=INSERT, tiny payload)  
-3. Close; reopen `"rb"`; read length → body → checksum; print fields  
-4. Append a second record; read **both** in a loop until EOF  
+1. Open/create a file `"wb"` / `"ab"`
+2. Write one handmade record (fixed LSN=1, op=INSERT, tiny payload)
+3. Close; reopen `"rb"`; read length → body → checksum; print fields
+4. Append a second record; read **both** in a loop until EOF
 
 **Checks**
 
 - Truncated last record → detect via length / checksum / short `fread`  
-- Bad checksum → reject  
+- Bad checksum → reject
 
 **Done when:** round-trip two records in a sandbox binary.
 
 ---
+
+
 
 ### Stage 2 — `WalWriter` / `WalReader` API (library, still no DB mutation)
 
@@ -154,13 +174,15 @@ for_each_record(callback)      // or read_all into a vector
 
 - Never rewrite the middle of the WAL — only append  
 - LSN strictly increases  
-- Same endian / fixed-width discipline as serializer  
+- Same endian / fixed-width discipline as serializer
 
 **Tests:** append N records, reopen, iterate, fields match; corrupt tail → stop or error cleanly.
 
 **Done when:** unit tests pass with no `VectorDB` involvement.
 
 ---
+
+
 
 ### Stage 3 — Wire mutations: log first, then memory
 
@@ -181,6 +203,8 @@ append WAL → flush → existing in-memory logic
 
 ---
 
+
+
 ### Stage 4 — Replay on open
 
 **Goals:** startup path:
@@ -193,25 +217,27 @@ load .vdb (or empty DB) → replay WAL → DB matches “last durable state”
 
 - Replaying INSERT of existing id → treat as ok / skip / or require UPDATE semantics  
 - Replaying DELETE of missing id → ok  
-- Document the choice in this note  
+- Document the choice in this note
 
 **Tests**
 
-1. Mutate + checkpoint + clear WAL → open → state from snapshot only  
-2. Mutate without checkpoint → kill process simulation (close without save) → reopen → replay restores ops  
-3. Snapshot + more WAL ops → reopen → snapshot then replay  
+1. Mutate + checkpoint + clear WAL → open → state from snapshot only
+2. Mutate without checkpoint → kill process simulation (close without save) → reopen → replay restores ops
+3. Snapshot + more WAL ops → reopen → snapshot then replay
 
 **Done when:** reopen without an explicit `save` still restores committed ops via WAL.
 
 ---
 
+
+
 ### Stage 5 — Checkpoint
 
 **Goals:**
 
-1. `save_database` to `.vdb`  
-2. Append CHECKPOINT record (include last LSN included in snapshot)  
-3. Truncate WAL or start a new WAL file  
+1. `save_database` to `.vdb`
+2. Append CHECKPOINT record (include last LSN included in snapshot)
+3. Truncate WAL or start a new WAL file
 
 **Why:** unbounded WAL = slow open and huge disk.
 
@@ -220,6 +246,8 @@ load .vdb (or empty DB) → replay WAL → DB matches “last durable state”
 **Done when:** checkpoint is explicit API or automatic every N ops.
 
 ---
+
+
 
 ### Stage 6 — Crash injection (the real exam)
 
@@ -238,16 +266,20 @@ Process `abort()` or `_exit(1)` at that point. Separate test process or `fork` r
 
 **Minimum crash matrix**
 
-| Crash point | Expected after recovery |
-|-------------|-------------------------|
-| Before WAL append | Op not present |
-| After flush, before/during memory apply | Op **present** (replay) |
-| During snapshot write | Old snapshot + WAL still recover OR reject bad snapshot + replay |
-| After checkpoint, before WAL truncate | Recover from new snapshot; WAL replay must not double-break |
+
+| Crash point                             | Expected after recovery                                          |
+| --------------------------------------- | ---------------------------------------------------------------- |
+| Before WAL append                       | Op not present                                                   |
+| After flush, before/during memory apply | Op **present** (replay)                                          |
+| During snapshot write                   | Old snapshot + WAL still recover OR reject bad snapshot + replay |
+| After checkpoint, before WAL truncate   | Recover from new snapshot; WAL replay must not double-break      |
+
 
 **Done when:** the matrix is automated in GoogleTest (or a small crash harness).
 
 ---
+
+
 
 ### Stage 7 — fsync and durability honesty
 
@@ -259,6 +291,8 @@ Process `abort()` or `_exit(1)` at that point. Separate test process or `fork` r
 
 ---
 
+
+
 ## What we are *not* doing yet
 
 - Multi-statement transactions / rollback  
@@ -269,6 +303,8 @@ Process `abort()` or `_exit(1)` at that point. Separate test process or `fork` r
 Keep the WAL **simple and correct** first.
 
 ---
+
+
 
 ## Suggested file layout when you start coding
 
@@ -283,30 +319,38 @@ notes/06-wal-learning.md   # this file — update “Decisions” below as you g
 
 ---
 
+
+
 ## Decisions log (fill in as you decide)
 
-| Decision | Choice | Date |
-|----------|--------|------|
-| WAL path naming | | |
-| record_length covers … | | |
-| Separate COMMIT record? | | |
-| Replay INSERT if id exists | | |
-| Checkpoint trigger | | |
-| fsync in flush? | | |
+
+| Decision                        | Choice                                                 | Date    |
+| ------------------------------- | ------------------------------------------------------ | ------- |
+| WAL path naming                 | caller-supplied path beside `.vdb`                     | 2026-08 |
+| record_length covers …          | lsn+op+payload+checksum (not the length field)         | 2026-08 |
+| Separate COMMIT record?         | no — one user op = one durable record                  | 2026-08 |
+| Replay INSERT if id exists      | treat `duplicate_id` as ok (idempotent redo)           | 2026-08 |
+| Replay DELETE if missing        | treat `not_found` as ok                                | 2026-08 |
+| Checkpoint trigger              | explicit `VectorDB::checkpoint`                        | 2026-08 |
+| fsync in flush?                 | yes (`fflush` + `fsync`); process-crash scope          | 2026-08 |
+| Crash after append before flush | often **present** on process crash here (`fwrite` may already be in kernel); durable point we document is still `AfterWalFlush` | 2026-08 |
+
 
 ---
+
+
 
 ## Pace reminder
 
 Same as persistence:
 
-1. Read / write your own words  
-2. Draw  
-3. Sandbox one record  
-4. Library append/read  
-5. Wire to DB  
-6. Replay  
-7. Checkpoint  
-8. Crash tests  
+1. Read / write your own words
+2. Draw
+3. Sandbox one record
+4. Library append/read
+5. Wire to DB
+6. Replay
+7. Checkpoint
+8. Crash tests
 
 When stuck: stop at the stage boundary and ask — don’t “finish WAL” in one jump.

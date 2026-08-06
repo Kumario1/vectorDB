@@ -18,6 +18,8 @@ namespace {
 
 constexpr std::uint64_t kCrashTestId = 42;
 constexpr float kCrashTestVec[] = {1.0f, 2.0f};
+constexpr float kCrashCheckpointA[] = {1.0f, 2.0f};
+constexpr float kCrashCheckpointB[] = {5.0f, 6.0f};
 
 void child_crashing_insert(const std::string& wal_path, vectordb::CrashPoint point) {
     vectordb::set_crash_point(point);
@@ -31,11 +33,51 @@ void child_crashing_insert(const std::string& wal_path, vectordb::CrashPoint poi
     _exit(12);  // crash point did not fire
 }
 
+void child_crashing_checkpoint(const std::string& wal_path,
+                               const std::string& snap_path,
+                               vectordb::CrashPoint point) {
+    vectordb::VectorDB db(2);
+    if (db.enable_wal(wal_path) != vectordb::Status::ok) {
+        _exit(20);
+    }
+    if (db.insert(10, kCrashCheckpointA) != vectordb::Status::ok) {
+        _exit(21);
+    }
+    if (db.insert(20, kCrashCheckpointB) != vectordb::Status::ok) {
+        _exit(22);
+    }
+    vectordb::set_crash_point(point);
+    if (db.checkpoint(snap_path) != vectordb::Status::ok) {
+        _exit(23);
+    }
+    _exit(24);  // crash point did not fire
+}
+
 void expect_child_aborted(pid_t pid) {
     int status = 0;
     ASSERT_EQ(waitpid(pid, &status, 0), pid);
     ASSERT_TRUE(WIFSIGNALED(status)) << "status=" << status;
     EXPECT_EQ(WTERMSIG(status), SIGABRT);
+}
+
+void fork_crashing_insert(const std::string& wal_path, vectordb::CrashPoint point) {
+    const pid_t pid = fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        child_crashing_insert(wal_path, point);
+    }
+    expect_child_aborted(pid);
+}
+
+void fork_crashing_checkpoint(const std::string& wal_path,
+                              const std::string& snap_path,
+                              vectordb::CrashPoint point) {
+    const pid_t pid = fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        child_crashing_checkpoint(wal_path, snap_path, point);
+    }
+    expect_child_aborted(pid);
 }
 
 }  // namespace
@@ -304,13 +346,7 @@ TEST_F(WalTest, CheckpointThenOpenUsesSnapshotOnly) {
 }
 
 TEST_F(WalTest, CrashAfterWalFlushRecoversInsertOnReopen) {
-    const pid_t pid = fork();
-    ASSERT_GE(pid, 0);
-    if (pid == 0) {
-        child_crashing_insert(path_, vectordb::CrashPoint::AfterWalFlush);
-    }
-
-    expect_child_aborted(pid);
+    fork_crashing_insert(path_, vectordb::CrashPoint::AfterWalFlush);
 
     vectordb::VectorDB loaded(2);
     ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
@@ -321,16 +357,57 @@ TEST_F(WalTest, CrashAfterWalFlushRecoversInsertOnReopen) {
 }
 
 TEST_F(WalTest, CrashBeforeWalAppendDoesNotRecoverInsert) {
-    const pid_t pid = fork();
-    ASSERT_GE(pid, 0);
-    if (pid == 0) {
-        child_crashing_insert(path_, vectordb::CrashPoint::BeforeWalAppend);
-    }
-
-    expect_child_aborted(pid);
+    fork_crashing_insert(path_, vectordb::CrashPoint::BeforeWalAppend);
 
     vectordb::VectorDB loaded(2);
     ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 0u);
     EXPECT_FALSE(loaded.get(kCrashTestId).has_value());
+}
+
+// Policy: on this platform, fwrite bytes often reach the kernel even before
+// fflush (abort does not reliably drop the stdio buffer). Process-crash
+// recovery therefore sees the insert. Guaranteed durable commit point remains
+// AfterWalFlush (fflush + fsync).
+TEST_F(WalTest, CrashAfterWalAppendBeforeFlushRecoversInsertOnReopen) {
+    fork_crashing_insert(path_, vectordb::CrashPoint::AfterWalAppendBeforeFlush);
+
+    vectordb::VectorDB loaded(2);
+    ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
+    EXPECT_EQ(loaded.size(), 1u);
+    ASSERT_TRUE(loaded.get(kCrashTestId).has_value());
+}
+
+TEST_F(WalTest, CrashAfterMemoryApplyRecoversInsertOnReopen) {
+    fork_crashing_insert(path_, vectordb::CrashPoint::AfterMemoryApply);
+
+    vectordb::VectorDB loaded(2);
+    ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
+    EXPECT_EQ(loaded.size(), 1u);
+    ASSERT_TRUE(loaded.get(kCrashTestId).has_value());
+    EXPECT_EQ(loaded.get(kCrashTestId)->data()[0], 1.0f);
+    EXPECT_EQ(loaded.get(kCrashTestId)->data()[1], 2.0f);
+}
+
+TEST_F(WalTest, CrashAfterCheckpointSnapshotRecoversFromSnapAndWal) {
+    const std::string snap = (dir_ / "crash_after_snap.vdb").string();
+    fork_crashing_checkpoint(path_, snap, vectordb::CrashPoint::AfterCheckpointSnapshot);
+
+    vectordb::VectorDB loaded(2);
+    ASSERT_EQ(loaded.open(snap, path_), vectordb::Status::ok);
+    EXPECT_EQ(loaded.size(), 2u);
+    EXPECT_TRUE(loaded.get(10).has_value());
+    EXPECT_TRUE(loaded.get(20).has_value());
+}
+
+TEST_F(WalTest, CrashAfterCheckpointBeforeTruncateDoesNotDoubleApply) {
+    const std::string snap = (dir_ / "crash_before_trunc.vdb").string();
+    fork_crashing_checkpoint(
+        path_, snap, vectordb::CrashPoint::AfterCheckpointBeforeTruncateWal);
+
+    vectordb::VectorDB loaded(2);
+    ASSERT_EQ(loaded.open(snap, path_), vectordb::Status::ok);
+    EXPECT_EQ(loaded.size(), 2u);
+    EXPECT_TRUE(loaded.get(10).has_value());
+    EXPECT_TRUE(loaded.get(20).has_value());
 }
