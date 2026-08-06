@@ -1,13 +1,44 @@
+#include "vectordb/crash.hpp"
 #include "vectordb/database.hpp"
 #include "vectordb/wal.hpp"
 
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+constexpr std::uint64_t kCrashTestId = 42;
+constexpr float kCrashTestVec[] = {1.0f, 2.0f};
+
+void child_crashing_insert(const std::string& wal_path, vectordb::CrashPoint point) {
+    vectordb::set_crash_point(point);
+    vectordb::VectorDB db(2);
+    if (db.enable_wal(wal_path) != vectordb::Status::ok) {
+        _exit(10);
+    }
+    if (db.insert(kCrashTestId, kCrashTestVec) != vectordb::Status::ok) {
+        _exit(11);
+    }
+    _exit(12);  // crash point did not fire
+}
+
+void expect_child_aborted(pid_t pid) {
+    int status = 0;
+    ASSERT_EQ(waitpid(pid, &status, 0), pid);
+    ASSERT_TRUE(WIFSIGNALED(status)) << "status=" << status;
+    EXPECT_EQ(WTERMSIG(status), SIGABRT);
+}
+
+}  // namespace
 
 class WalTest : public ::testing::Test {
 protected:
@@ -270,4 +301,36 @@ TEST_F(WalTest, CheckpointThenOpenUsesSnapshotOnly) {
     EXPECT_TRUE(loaded.get(10).has_value());
     EXPECT_TRUE(loaded.get(20).has_value());
     EXPECT_TRUE(loaded.get(30).has_value());
+}
+
+TEST_F(WalTest, CrashAfterWalFlushRecoversInsertOnReopen) {
+    const pid_t pid = fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        child_crashing_insert(path_, vectordb::CrashPoint::AfterWalFlush);
+    }
+
+    expect_child_aborted(pid);
+
+    vectordb::VectorDB loaded(2);
+    ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
+    EXPECT_EQ(loaded.size(), 1u);
+    ASSERT_TRUE(loaded.get(kCrashTestId).has_value());
+    EXPECT_EQ(loaded.get(kCrashTestId)->data()[0], 1.0f);
+    EXPECT_EQ(loaded.get(kCrashTestId)->data()[1], 2.0f);
+}
+
+TEST_F(WalTest, CrashBeforeWalAppendDoesNotRecoverInsert) {
+    const pid_t pid = fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        child_crashing_insert(path_, vectordb::CrashPoint::BeforeWalAppend);
+    }
+
+    expect_child_aborted(pid);
+
+    vectordb::VectorDB loaded(2);
+    ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
+    EXPECT_EQ(loaded.size(), 0u);
+    EXPECT_FALSE(loaded.get(kCrashTestId).has_value());
 }
