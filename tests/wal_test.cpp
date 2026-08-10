@@ -421,3 +421,32 @@ TEST_F(WalTest, CrashAfterCheckpointBeforeTruncateDoesNotDoubleApply) {
     EXPECT_TRUE(loaded.get(10).has_value());
     EXPECT_TRUE(loaded.get(20).has_value());
 }
+
+// Abort after CHECKPOINT is flushed but before truncate so the record is
+// still on disk — proves VectorDB::checkpoint wrote it with the right LSN.
+TEST_F(WalTest, CheckpointWritesCheckpointRecordBeforeTruncate) {
+    const std::string snap = (dir_ / "checkpoint_record.vdb").string();
+    fork_crashing_checkpoint(
+        path_, snap, vectordb::CrashPoint::AfterCheckpointBeforeTruncateWal);
+
+    const auto records = read_all();
+    ASSERT_EQ(records.size(), 3u);
+
+    EXPECT_EQ(records[0].op, vectordb::WalOp::Insert);
+    EXPECT_EQ(records[0].lsn, 1u);
+    EXPECT_EQ(records[0].id, 10u);
+
+    EXPECT_EQ(records[1].op, vectordb::WalOp::Insert);
+    EXPECT_EQ(records[1].lsn, 2u);
+    EXPECT_EQ(records[1].id, 20u);
+
+    EXPECT_EQ(records[2].op, vectordb::WalOp::Checkpoint);
+    EXPECT_EQ(records[2].lsn, 3u);
+    EXPECT_EQ(records[2].checkpoint_lsn, 2u);
+
+    vectordb::VectorDB loaded(2);
+    ASSERT_EQ(loaded.open(snap, path_), vectordb::Status::ok);
+    EXPECT_EQ(loaded.size(), 2u);
+    EXPECT_TRUE(loaded.get(10).has_value());
+    EXPECT_TRUE(loaded.get(20).has_value());
+}
