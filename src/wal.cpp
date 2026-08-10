@@ -167,13 +167,43 @@ Status WalWriter::append(WalRecord& rec) {
             return Status::ok;
         }
         case WalOp::Checkpoint: {
-            return Status::invalid_argument;
+            //write the record length
+            std::uint32_t record_length = 8 + 4 + 8 + 4;
+            if (std::fwrite(&record_length, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+
+            std::uint32_t checksum = 0;
+            
+
+            //write the lsn to the file
+            if(std::fwrite(&rec.lsn, 8, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.lsn, 8);
+            //write the op to the file
+            if(std::fwrite(&rec.op, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.op, 4);
+            //write the checkpoint lsn to the file
+            if(std::fwrite(&rec.checkpoint_lsn, 8, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            add_bytes(checksum, &rec.checkpoint_lsn, 8);
+            //write the checksum to the file
+            if(std::fwrite(&checksum, 4, 1, file_) != 1) {
+                return Status::invalid_argument;
+            }
+            //increment the next lsn
+            ++next_lsn_;
+            return Status::ok;
         }
         default: {
             return Status::invalid_argument;
         }
     }
-}
+} //end of append function
 
 // ----------------- WalReader -----------------
 

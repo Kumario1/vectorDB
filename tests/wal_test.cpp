@@ -180,14 +180,24 @@ TEST_F(WalTest, RejectsDimensionMismatch) {
     EXPECT_EQ(writer.append(bad), vectordb::Status::dimension_mismatch);
 }
 
-TEST_F(WalTest, RejectsUnsupportedOp) {
-    vectordb::WalWriter writer(path_);
-    ASSERT_EQ(writer.open(), vectordb::Status::ok);
+TEST_F(WalTest, AppendCheckpointRoundTrip) {
+    {
+        vectordb::WalWriter writer(path_);
+        ASSERT_EQ(writer.open(), vectordb::Status::ok);
 
-    vectordb::WalRecord cp;
-    cp.op = vectordb::WalOp::Checkpoint;
-    cp.checkpoint_lsn = 1;
-    EXPECT_EQ(writer.append(cp), vectordb::Status::invalid_argument);
+        vectordb::WalRecord cp;
+        cp.op = vectordb::WalOp::Checkpoint;
+        cp.checkpoint_lsn = 7;
+        ASSERT_EQ(writer.append(cp), vectordb::Status::ok);
+        EXPECT_EQ(cp.lsn, 1u);
+        ASSERT_EQ(writer.flush(), vectordb::Status::ok);
+    }
+
+    const auto records = read_all();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].op, vectordb::WalOp::Checkpoint);
+    EXPECT_EQ(records[0].lsn, 1u);
+    EXPECT_EQ(records[0].checkpoint_lsn, 7u);
 }
 
 TEST_F(WalTest, MissingFileOpenFails) {
