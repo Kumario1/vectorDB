@@ -332,6 +332,7 @@ notes/06-wal-learning.md   # this file — update “Decisions” below as you g
 | Replay INSERT if id exists      | treat `duplicate_id` as ok (idempotent redo)           | 2026-08 |
 | Replay DELETE if missing        | treat `not_found` as ok                                | 2026-08 |
 | Checkpoint trigger              | explicit `VectorDB::checkpoint`                        | 2026-08 |
+| CHECKPOINT WAL record           | after save, before truncate; payload `checkpoint_lsn`; replay no-op; WAL still truncated | 2026-08 |
 | fsync in flush?                 | yes (`fflush` + `fsync`); process-crash scope          | 2026-08 |
 | Crash after append before flush | often **present** on process crash here (`fwrite` may already be in kernel); durable point we document is still `AfterWalFlush` | 2026-08 |
 
