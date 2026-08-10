@@ -63,6 +63,14 @@ Status VectorDB::checkpoint(const std::string& snapshot_path) {
         Status st = save(snapshot_path);
         if (st != Status::ok) {return st;}
         maybe_crash(CrashPoint::AfterCheckpointSnapshot);
+        //create wal record for checkpoitn
+        WalRecord rec;
+        rec.op = WalOp::Checkpoint;
+        rec.checkpoint_lsn = wal_->next_lsn() - 1;
+        st = wal_->append(rec);
+        if (st != Status::ok) {return st;}
+        st = wal_->flush();
+        if (st != Status::ok) {return st;}
 
         std::string wal_path = wal_path_;
         wal_.reset();
