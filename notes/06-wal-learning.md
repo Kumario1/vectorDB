@@ -355,3 +355,11 @@ Same as persistence:
 8. Crash tests
 
 When stuck: stop at the stage boundary and ask — don’t “finish WAL” in one jump.
+
+---
+
+## Milestone 6 status (2026-08)
+
+**Complete for Version 0.2:** WAL library, log-before-mutate, `fflush`+`fsync`, `open`/replay, checkpoint + CHECKPOINT record, crash hooks + fork harness/matrix, idempotent replay.
+
+**Next curriculum:** Milestone 7 — segments, memtable, tombstones, compaction (LSM-style).
