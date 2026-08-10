@@ -15,9 +15,9 @@ flowchart LR
   I --> S[Similarity]
   S --> K[Exact top-k]
   K --> P[Binary persistence]
-  P --> W[WAL + log-before-mutate]
-  W --> R[open / replay / checkpoint]
-  R --> C[Crash / fsync — next]
+  P --> W[WAL + recovery]
+  W --> V02[Version 0.2]
+  V02 --> Seg[Segments / compaction — next]
 ```
 
 | Topic | Progress |
@@ -28,16 +28,17 @@ flowchart LR
 | Similarity | Cosine, dot, squared Euclidean |
 | Exact top-k | Min-heap search · tag `v0.1-in-memory-exact` |
 | Binary persistence | Save/load + checksum |
-| WAL | Writer/reader + log-before-mutate on insert/update/remove |
-| open / replay / checkpoint | Load snapshot → replay WAL → truncate on checkpoint |
-| Crash injection / `fsync` | **Next** |
+| WAL + recovery | Log-before-mutate, `fsync`, open/replay, checkpoint + CHECKPOINT record |
+| Crash injection | Fork harness + matrix (process-crash scope) |
+| **Version 0.2** | **Milestone 6 complete** |
+| Segments / compaction | **Next** (Milestone 7) |
 
 ```mermaid
-pie title C++ lines by area (~2,900 total)
-  "tests" : 1137
-  "src" : 997
+pie title C++ lines by area (~3,180 total)
+  "tests" : 1316
+  "src" : 1080
   "tools" : 360
-  "include" : 296
+  "include" : 316
   "benchmarks" : 110
 ```
 
@@ -397,13 +398,15 @@ Status VectorDB::open(const std::string& snapshot_path,
 }
 
 Status VectorDB::checkpoint(const std::string& snapshot_path) {
-    // save(snapshot); wal_.reset(); truncate wal_path_; enable_wal(...)
+    // save(snapshot);
+    // append CHECKPOINT{checkpoint_lsn} + flush;
+    // wal_.reset(); truncate wal_path_; enable_wal(...)
 }
 ```
 
-**Hard lessons so far:** `fread` return value ≠ `record_length`; close the writer (`wal_.reset()`) *before* truncating the file; don’t call `~WalWriter()` by hand; store `wal_path_` because the writer doesn’t expose `path()`.
+**Hard lessons so far:** `fread` return value ≠ `record_length`; close the writer (`wal_.reset()`) *before* truncating the file; don’t call `~WalWriter()` by hand; store `wal_path_`; replay must be idempotent when snapshot + old WAL overlap; `fwrite` may already be in the kernel before `fflush` on some platforms — documented durable point is still `fflush` + `fsync`.
 
-**Still to do:** crash injection, durable `fsync`, optional CHECKPOINT records in the log.
+**Milestone 6 complete:** fsync, crash hooks + fork harness/matrix, CHECKPOINT record before truncate. Next curriculum block: **Milestone 7 — segments, tombstones, compaction**.
 
 ---
 
@@ -444,7 +447,7 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**WAL remaining stages:** crash matrix → durable `fsync` → optional CHECKPOINT log records.  
+**Milestone 6 done** (Version 0.2). **Next:** Milestone 7 — segments / memtable / compaction.  
 Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---
