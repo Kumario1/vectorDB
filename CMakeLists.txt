@@ -63,6 +63,11 @@ add_executable(storage_layout_benchmark
 )
 target_link_libraries(storage_layout_benchmark PRIVATE vectordb)
 
+add_executable(checkpoint_vs_segment_benchmark
+    benchmarks/checkpoint_vs_segment_benchmark.cpp
+)
+target_link_libraries(checkpoint_vs_segment_benchmark PRIVATE vectordb)
+
 add_executable(format_sandbox tools/format_sandbox.cpp)
 add_executable(wal_sandbox tools/wal_sandbox.cpp)
 add_executable(segment_sandbox tools/segment_sandbox.cpp)
