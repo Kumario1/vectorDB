@@ -209,7 +209,7 @@ Do **one ticket at a time**. Do not implement compaction before reads work; do n
 | Memtable v1 | `std::map<uint64_t, Entry>` — skip list optional later | 2026-08 |
 | Segment naming | `segment-NNNNNN.vec` (+ `.meta` / `.idx` when needed) | 2026-08 |
 | Flush threshold | **row count** first (bytes threshold later) | 2026-08 |
-| Segment format | TBD in #9 (magic, version, records, checksum like `.vdb`) | |
+| Segment format | `VECSEG01` SoA: magic/version/dims/count/metric + ids[] + deleted[] + floats[count×dims] + checksum; tombstones write zero floats | 2026-08 |
 | v0.2 `.vdb` + WAL | Keep working; segment path built beside until integration | 2026-08 |
 | Compaction trigger | Manual API first (`compact()`); auto policy later | 2026-08 |
 | MANIFEST atomicity | Write temp + rename over `MANIFEST` (document in #12) | 2026-08 |
@@ -244,4 +244,4 @@ When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump
 
 ## Milestone 7 status
 
-**#8 complete:** architecture note written. **Next:** #9 segment format sandbox.
+**#8 complete:** architecture note written. **#9 complete:** `VECSEG01` segment writer/reader + sandbox + tests. **Next:** #10 memtable.
