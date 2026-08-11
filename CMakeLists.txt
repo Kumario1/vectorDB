@@ -15,6 +15,7 @@ add_library(vectordb
     src/serializer.cpp
     src/wal.cpp
     src/crash.cpp
+    src/segment.cpp
 )
 target_include_directories(vectordb
     PUBLIC
@@ -41,6 +42,7 @@ add_executable(vector_store_test
     tests/search_test.cpp
     tests/persistence_test.cpp
     tests/wal_test.cpp
+    tests/segment_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE
@@ -63,3 +65,5 @@ target_link_libraries(storage_layout_benchmark PRIVATE vectordb)
 
 add_executable(format_sandbox tools/format_sandbox.cpp)
 add_executable(wal_sandbox tools/wal_sandbox.cpp)
+add_executable(segment_sandbox tools/segment_sandbox.cpp)
+target_link_libraries(segment_sandbox PRIVATE vectordb)
