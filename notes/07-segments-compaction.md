@@ -258,4 +258,4 @@ When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump
 
 ## Milestone 7 status
 
-**#8 complete:** architecture note written. **#9 complete:** `VECSEG01` segment writer/reader + sandbox + tests. **#10 complete:** `Memtable` (`std::map`, row-count threshold); tombstone stays in the map; `remove` of an already-deleted id is `ok`. **#11 complete:** `flush_memtable` writes a `VECSEG01` file then `clear()`. **Next:** #12 MANIFEST.
+**#8–#11 complete.** **#12 complete:** `Manifest` (`VECMAN01`, load + temp/fsync/rename replace). **Next:** #13 read path (memtable + segments, newest first).
