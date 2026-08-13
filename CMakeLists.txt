@@ -16,6 +16,7 @@ add_library(vectordb
     src/wal.cpp
     src/crash.cpp
     src/segment.cpp
+    src/memtable.cpp
 )
 target_include_directories(vectordb
     PUBLIC
@@ -43,6 +44,7 @@ add_executable(vector_store_test
     tests/persistence_test.cpp
     tests/wal_test.cpp
     tests/segment_test.cpp
+    tests/memtable_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE
