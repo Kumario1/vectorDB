@@ -62,6 +62,10 @@ namespace vectordb {
         return Status::ok;
     }
 
+    void Memtable::tombstone(std::uint64_t id) {
+        entries_[id] = {true, {}};
+    }
+
     void Memtable::clear() {
         entries_.clear();
     }
@@ -72,6 +76,14 @@ namespace vectordb {
             return std::nullopt;
         }
         return std::span<const float>(it->second.values);
+    }
+
+    std::optional<MemtableEntry> Memtable::find(std::uint64_t id) const {
+        auto it = entries_.find(id);
+        if (it == entries_.end()) {
+            return std::nullopt;
+        }
+        return it->second; //return the entry could be live or tombstone
     }
 
     std::size_t Memtable::size() const noexcept {

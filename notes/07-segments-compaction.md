@@ -258,4 +258,4 @@ When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump
 
 ## Milestone 7 status
 
-**#8–#11 complete.** **#12 complete:** `Manifest` (`VECMAN01`, load + temp/fsync/rename replace). **Next:** #13 read path (memtable + segments, newest first).
+**#8–#12 complete.** **#13 complete:** `SegmentStore` newest-wins `get`/`search` (memtable + segments, top-k heap); `remove` uses `Memtable::tombstone`. **Next:** #14 harden tombstones across segments / #15 compaction.
