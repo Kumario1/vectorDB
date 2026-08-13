@@ -5,8 +5,8 @@
 #include <optional>
 #include <span>
 #include <map>
+#include <string>
 #include "vectordb/database.hpp"
-
 
 //--------------------------------
 // insert(42, vec)  → map[42] = { live, vec }
@@ -31,10 +31,12 @@ namespace vectordb {
 
             Status put(std::uint64_t id, const std::vector<float>& values);
             Status remove(std::uint64_t id);
+            void clear();
             std::optional<std::span<const float>> get(std::uint64_t id) const;
 
             std::size_t size() const noexcept;
             std::size_t live_count() const noexcept;
+            std::size_t dimensions() const noexcept;
             bool needs_flush() const noexcept;
 
             // for #11 we need to iterate in key order to feed SegementWrite, so it can write in the file
@@ -48,5 +50,7 @@ namespace vectordb {
             std::map<std::uint64_t, MemtableEntry> entries_;
 
     };
+
+    Status flush_memtable(Memtable& mt, const std::string& path, Metric metric);
 
 } // namespace vectordb

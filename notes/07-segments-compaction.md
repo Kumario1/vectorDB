@@ -4,7 +4,7 @@ We finished **Version 0.2**: one in-memory store, a `.vdb` snapshot, WAL + check
 
 Milestone 7 moves toward **LSM-style** storage: append-only immutable files, a small mutable buffer, and occasional merge (compaction). Same slow path as earlier milestones: ideas → sandbox → library → wire to DB → tests.
 
-Full curriculum: [`README_VectorDB_From_Scratch.md`](../README_VectorDB_From_Scratch.md) (Milestone 7).
+Full curriculum: `[README_VectorDB_From_Scratch.md](../README_VectorDB_From_Scratch.md)` (Milestone 7).
 
 ---
 
@@ -33,16 +33,18 @@ Why is a frozen segment file **never edited** after flush? (Hint: immutability s
 
 ## Vocabulary (learn these first)
 
-| Term | Meaning for us |
-|------|----------------|
-| **Memtable** | Mutable in-memory buffer for live inserts/updates/deletes |
-| **Segment** | Immutable on-disk file produced by flushing a memtable |
-| **Flush** | Freeze memtable contents → write one new segment; start fresh memtable |
-| **MANIFEST** | Small durable file listing which segment files are part of the live DB |
-| **Tombstone** | Delete marker for an id — hides older values without editing old files |
-| **Newest-wins** | Lookup/search consults memtable first, then segments newest → oldest |
-| **Compaction** | Merge several segments into fewer files; drop stale versions and honored tombstones |
-| **LSM-tree** | Family of designs: memtable + sorted immutable runs + merge |
+
+| Term            | Meaning for us                                                                      |
+| --------------- | ----------------------------------------------------------------------------------- |
+| **Memtable**    | Mutable in-memory buffer for live inserts/updates/deletes                           |
+| **Segment**     | Immutable on-disk file produced by flushing a memtable                              |
+| **Flush**       | Freeze memtable contents → write one new segment; start fresh memtable              |
+| **MANIFEST**    | Small durable file listing which segment files are part of the live DB              |
+| **Tombstone**   | Delete marker for an id — hides older values without editing old files              |
+| **Newest-wins** | Lookup/search consults memtable first, then segments newest → oldest                |
+| **Compaction**  | Merge several segments into fewer files; drop stale versions and honored tombstones |
+| **LSM-tree**    | Family of designs: memtable + sorted immutable runs + merge                         |
+
 
 **Resources (skim, don’t binge):**
 
@@ -73,6 +75,8 @@ flowchart LR
   end
 ```
 
+
+
 **Important:** tickets #9–#15 build segment pieces **without** breaking the existing `.vdb` + WAL path until we explicitly integrate. Two storage stories can coexist during learning.
 
 ---
@@ -101,6 +105,8 @@ flowchart TB
   seg --> man["update MANIFEST (atomic replace)"]
   man --> empty["new empty memtable"]
 ```
+
+
 
 ### Read path (newest-wins)
 
@@ -139,12 +145,14 @@ Compaction is **merge**, not “keep only the newest N segment files.” Droppin
 
 ## Memtable vs segment (mental model)
 
-| | Memtable | Segment |
-|---|----------|---------|
-| Location | RAM | Disk |
-| Mutable? | Yes | No (immutable after flush) |
-| Size | Small (threshold-triggered flush) | Fixed at write time |
-| New writes after flush | Go here | Old segment untouched |
+
+|                        | Memtable                          | Segment                    |
+| ---------------------- | --------------------------------- | -------------------------- |
+| Location               | RAM                               | Disk                       |
+| Mutable?               | Yes                               | No (immutable after flush) |
+| Size                   | Small (threshold-triggered flush) | Fixed at write time        |
+| New writes after flush | Go here                           | Old segment untouched      |
+
 
 After flush: memtable → frozen into **one new segment file** → **new empty memtable**. The new segment is a **sibling**, not a patch on the previous file.
 
@@ -175,11 +183,13 @@ MANIFEST responsibilities:
 
 ## Relationship to WAL / checkpoint (0.2)
 
-| Mechanism | Role |
-|-----------|------|
-| WAL | Durability of **recent ops** since last durable bulk state |
-| `.vdb` checkpoint | Single-file **photo** of full RAM (0.2 model) |
-| Segments + MANIFEST | Append-only **bulk** state; avoid rewriting entire photo |
+
+| Mechanism           | Role                                                       |
+| ------------------- | ---------------------------------------------------------- |
+| WAL                 | Durability of **recent ops** since last durable bulk state |
+| `.vdb` checkpoint   | Single-file **photo** of full RAM (0.2 model)              |
+| Segments + MANIFEST | Append-only **bulk** state; avoid rewriting entire photo   |
+
 
 Long term, real systems combine these (log + LSM). For this learning repo: build segment machinery in M7 tickets first; decide later whether WAL feeds memtable directly or stays parallel to `.vdb` until a integration milestone.
 
@@ -187,16 +197,18 @@ Long term, real systems combine these (log + LSM). For this learning repo: build
 
 ## Learning stages (tickets #8–#15)
 
-| Stage | Ticket | Goal |
-|-------|--------|------|
-| 0 | **#8** (this note) | Vocabulary + architecture + decisions |
-| 1 | **#9** | Segment file format + sandbox round-trip |
-| 2 | **#10** | Memtable (`std::map`) + flush threshold |
-| 3 | **#11** | Flush memtable → segment file |
-| 4 | **#12** | MANIFEST load + atomic replace |
-| 5 | **#13** | Read path: memtable + segments, newest first |
-| 6 | **#14** | Tombstones hide older segment data |
-| 7 | **#15** | Compaction merge + manifest swap |
+
+| Stage | Ticket             | Goal                                         |
+| ----- | ------------------ | -------------------------------------------- |
+| 0     | **#8** (this note) | Vocabulary + architecture + decisions        |
+| 1     | **#9**             | Segment file format + sandbox round-trip     |
+| 2     | **#10**            | Memtable (`std::map`) + flush threshold      |
+| 3     | **#11**            | Flush memtable → segment file                |
+| 4     | **#12**            | MANIFEST load + atomic replace               |
+| 5     | **#13**            | Read path: memtable + segments, newest first |
+| 6     | **#14**            | Tombstones hide older segment data           |
+| 7     | **#15**            | Compaction merge + manifest swap             |
+
 
 Do **one ticket at a time**. Do not implement compaction before reads work; do not wire VectorDB before segment format round-trips.
 
@@ -204,16 +216,18 @@ Do **one ticket at a time**. Do not implement compaction before reads work; do n
 
 ## Decisions log (fill in as you go)
 
-| Decision | Choice | Date |
-|----------|--------|------|
-| Memtable v1 | `std::map<uint64_t, Entry>` — skip list optional later | 2026-08 |
-| Segment naming | `segment-NNNNNN.vec` (+ `.meta` / `.idx` when needed) | 2026-08 |
-| Flush threshold | **row count** first (bytes threshold later) | 2026-08 |
-| Segment format | `VECSEG01` SoA: magic/version/dims/count/metric + ids[] + deleted[] + floats[count×dims] + checksum; tombstones write zero floats | 2026-08 |
-| v0.2 `.vdb` + WAL | Keep working; segment path built beside until integration | 2026-08 |
-| Compaction trigger | Manual API first (`compact()`); auto policy later | 2026-08 |
-| MANIFEST atomicity | Write temp + rename over `MANIFEST` (document in #12) | 2026-08 |
-| WAL + segments integration | Deferred — note open questions here when decided | |
+
+| Decision                   | Choice                                                                                                                            | Date    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| Memtable v1                | `std::map<uint64_t, Entry>` — skip list optional later                                                                            | 2026-08 |
+| Segment naming             | `segment-NNNNNN.vec` (+ `.meta` / `.idx` when needed)                                                                             | 2026-08 |
+| Flush threshold            | **row count** first (bytes threshold later)                                                                                       | 2026-08 |
+| Segment format             | `VECSEG01` SoA: magic/version/dims/count/metric + ids[] + deleted[] + floats[count×dims] + checksum; tombstones write zero floats | 2026-08 |
+| v0.2 `.vdb` + WAL          | Keep working; segment path built beside until integration                                                                         | 2026-08 |
+| Compaction trigger         | Manual API first (`compact()`); auto policy later                                                                                 | 2026-08 |
+| MANIFEST atomicity         | Write temp + rename over `MANIFEST` (document in #12)                                                                             | 2026-08 |
+| WAL + segments integration | Deferred — note open questions here when decided                                                                                  |         |
+
 
 ---
 
@@ -229,14 +243,14 @@ Do **one ticket at a time**. Do not implement compaction before reads work; do n
 
 Same as persistence and WAL:
 
-1. Read / write your own words  
-2. Draw layout and data flow  
-3. Sandbox one segment record  
-4. Library write/read segment  
-5. Memtable + flush  
-6. MANIFEST  
-7. Read path + tombstones  
-8. Compaction  
+1. Read / write your own words
+2. Draw layout and data flow
+3. Sandbox one segment record
+4. Library write/read segment
+5. Memtable + flush
+6. MANIFEST
+7. Read path + tombstones
+8. Compaction
 
 When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump.
 
@@ -244,4 +258,4 @@ When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump
 
 ## Milestone 7 status
 
-**#8 complete:** architecture note written. **#9 complete:** `VECSEG01` segment writer/reader + sandbox + tests. **#10 complete:** `Memtable` (`std::map`, row-count threshold); tombstone stays in the map; `remove` of an already-deleted id is `ok`. **Next:** #11 flush memtable → segment.
+**#8 complete:** architecture note written. **#9 complete:** `VECSEG01` segment writer/reader + sandbox + tests. **#10 complete:** `Memtable` (`std::map`, row-count threshold); tombstone stays in the map; `remove` of an already-deleted id is `ok`. **#11 complete:** `flush_memtable` writes a `VECSEG01` file then `clear()`. **Next:** #12 MANIFEST.
