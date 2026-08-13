@@ -31,8 +31,11 @@ namespace vectordb {
 
             Status put(std::uint64_t id, const std::vector<float>& values);
             Status remove(std::uint64_t id);
+            // Always write a tombstone (even if id was not in the map). Used by SegmentStore.
+            void tombstone(std::uint64_t id);
             void clear();
             std::optional<std::span<const float>> get(std::uint64_t id) const;
+            std::optional<MemtableEntry> find(std::uint64_t id) const;
 
             std::size_t size() const noexcept;
             std::size_t live_count() const noexcept;

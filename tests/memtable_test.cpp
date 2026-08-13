@@ -16,6 +16,34 @@ using vectordb::SegmentRow;
 using vectordb::Status;
 using vectordb::flush_memtable;
 
+TEST(MemtableTest, FindDistinguishesMissingLiveAndTombstone) {
+    Memtable mt(2);
+    EXPECT_FALSE(mt.find(1).has_value());
+
+    ASSERT_EQ(mt.put(1, {1.0f, 0.0f}), Status::ok);
+    auto live = mt.find(1);
+    ASSERT_TRUE(live.has_value());
+    EXPECT_FALSE(live->is_deleted);
+    ASSERT_EQ(live->values.size(), 2u);
+
+    mt.tombstone(1);
+    auto dead = mt.find(1);
+    ASSERT_TRUE(dead.has_value());
+    EXPECT_TRUE(dead->is_deleted);
+    EXPECT_TRUE(dead->values.empty());
+}
+
+TEST(MemtableTest, TombstoneInsertsAbsentId) {
+    Memtable mt(2);
+    mt.tombstone(99);
+    EXPECT_EQ(mt.size(), 1u);
+    EXPECT_EQ(mt.live_count(), 0u);
+    EXPECT_FALSE(mt.get(99).has_value());
+    auto e = mt.find(99);
+    ASSERT_TRUE(e.has_value());
+    EXPECT_TRUE(e->is_deleted);
+}
+
 TEST(MemtableTest, ClearEmptiesEntries) {
     Memtable mt(2);
     ASSERT_EQ(mt.put(1, {1.0f, 0.0f}), Status::ok);
