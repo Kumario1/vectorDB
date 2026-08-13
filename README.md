@@ -18,7 +18,10 @@ flowchart LR
   P --> W[WAL + recovery]
   W --> V02[Version 0.2]
   V02 --> SegFmt[Segment format]
-  SegFmt --> Mem[Memtable / flush — next]
+  SegFmt --> Mem[Memtable + flush]
+  Mem --> Man[MANIFEST]
+  Man --> Read[SegmentStore read path]
+  Read --> Comp[Compaction — next]
 ```
 
 | Topic | Progress |
@@ -32,10 +35,13 @@ flowchart LR
 | WAL + recovery | Log-before-mutate, `fsync`, open/replay, checkpoint + CHECKPOINT record |
 | Crash injection | Fork harness + matrix (process-crash scope) |
 | **Version 0.2** | **Milestone 6 complete** |
-| Segment file format | `VECSEG01` writer/reader + sandbox + 8 tests (M7 #9) |
+| Segment file format | `VECSEG01` writer/reader + sandbox + tests (M7 #9) |
+| Memtable + flush | `std::map` memtable, row-count threshold, `flush_memtable` (M7 #10–#11) |
+| MANIFEST | `VECMAN01` load + temp/fsync/rename replace (M7 #12) |
+| SegmentStore read path | Newest-wins `get` / top-k `search`; LSM `tombstone` delete (M7 #13) |
 | Checkpoint vs segment I/O | Microbench: flush batch ≪ full `.vdb` rewrite |
-| Tests | **93/93** CTest passing (~0.36s) |
-| Memtable / MANIFEST / compaction | **Next** (M7 #10+) |
+| Tests | **141/141** CTest passing |
+| Compaction | **Next** (M7 #15); #14 tombstones across segments largely covered by #13 |
 
 ```mermaid
 pie title C++ lines by area (~3,900 total)
@@ -51,7 +57,7 @@ pie title C++ lines by area (~3,900 total)
 ## Architecture
 
 Version **0.2** (live path): one in-memory SoA store + `.vdb` snapshot + `.wal`.  
-Milestone **7** (building beside it): immutable segment files first; memtable / MANIFEST / compaction next — not wired into `VectorDB` yet.
+Milestone **7** (building beside it): memtable → flush → MANIFEST → `SegmentStore` read path done; compaction next — not wired into `VectorDB` yet.
 
 ```mermaid
 flowchart TB
@@ -75,9 +81,11 @@ flowchart TB
   end
 
   subgraph M7["Milestone 7 — beside 0.2"]
-    seglib["SegmentWriter / SegmentReader\nVECSEG01"]
+    seglib["SegmentWriter / SegmentReader"]
+    mt["Memtable"]
+    man["Manifest VECMAN01"]
+    ss["SegmentStore\nnewest-wins get/search"]
     segfile["segment-*.vec"]
-    mt["memtable — next"]
   end
 
   insert --> walptr
@@ -90,8 +98,12 @@ flowchart TB
   open --> store
   checkpoint --> snap
   checkpoint --> wallog
+  mt -->|"flush"| seglib
   seglib --> segfile
-  mt -.->|"flush (not wired yet)"| seglib
+  ss --> mt
+  ss --> man
+  ss --> seglib
+  man -.-> segfile
 ```
 
 ---
@@ -421,7 +433,7 @@ Status VectorDB::checkpoint(const std::string& snapshot_path) {
 
 **Hard lessons so far:** `fread` return value ≠ `record_length`; close the writer (`wal_.reset()`) *before* truncating the file; don’t call `~WalWriter()` by hand; store `wal_path_`; replay must be idempotent when snapshot + old WAL overlap; `fwrite` may already be in the kernel before `fflush` on some platforms — documented durable point is still `fflush` + `fsync`.
 
-**Milestone 6 complete:** fsync, crash hooks + fork harness/matrix (6 crash points), CHECKPOINT record before truncate. **93** CTest cases cover persistence, WAL, and segments.
+**Milestone 6 complete:** fsync, crash hooks + fork harness/matrix (6 crash points), CHECKPOINT record before truncate.
 
 ---
 
@@ -433,7 +445,8 @@ Status VectorDB::checkpoint(const std::string& snapshot_path) {
 - Checkpoint (0.2) = O(N) bytes + O(N) work per save.
 - Segment flush = O(batch) — write amplification tracks recent writes, not history.
 - Segments are **immutable** after `finish()` — simplifies crash safety and future concurrent readers.
-- Build the file format **beside** the live `.vdb` + WAL path; wire memtable / MANIFEST / `VectorDB` later.
+- **MANIFEST** is the source of truth for live segment files (never “glob `*.vec`”).
+- Build the LSM stack **beside** the live `.vdb` + WAL path; wire into `VectorDB` later.
 
 ```mermaid
 flowchart LR
@@ -441,9 +454,12 @@ flowchart LR
     ram["FlatVectorStore"] --> vdb["rewrite .vdb"]
   end
 
-  subgraph m7["Milestone 7 — building"]
-    mt["memtable — next"] -->|"flush"| seg["new segment-NNNNNN.vec"]
-    seg --> man["MANIFEST — later"]
+  subgraph m7["Milestone 7 — beside 0.2"]
+    mt["Memtable"] -->|"flush"| seg["segment-NNNNNN.vec"]
+    seg --> man["MANIFEST"]
+    ss["SegmentStore"] --> mt
+    ss --> man
+    ss --> seg
   end
 ```
 
@@ -454,35 +470,18 @@ flowchart LR
 [ checksum u32 ]
 ```
 
-```cpp
-inline constexpr char kSegmentMagic[8] = {'V','E','C','S','E','G','0','1'};
-inline constexpr std::uint32_t kSegmentVersion = 1;
+**Pieces shipped (#8–#13):**
+- `SegmentWriter` / `SegmentReader` (`VECSEG01`)
+- `Memtable` (`std::map`, row-count `needs_flush`, `tombstone`)
+- `flush_memtable` → new `.vec` then clear
+- `Manifest` (`VECMAN01`, temp + `fsync` + rename)
+- `SegmentStore`: put/remove/flush/open + newest-wins `get` + O(n log k) `search`
 
-struct SegmentRow {
-    std::uint64_t id = 0;
-    bool is_deleted = false;
-    std::vector<float> values;  // empty OK when deleted
-};
+**Hard lesson — LSM delete:** after flush the id is gone from the memtable. `Memtable::remove` would return `not_found`. `SegmentStore::remove` must `tombstone(id)` so a newer delete marker hides older segment rows.
 
-class SegmentWriter {
-public:
-    Status open(std::size_t dimensions, Metric metric);
-    Status append(const SegmentRow& row);
-    Status finish();  // header + SoA payload + checksum, then close
-};
+**Benchmark takeaway** (`checkpoint_vs_segment_benchmark`): at **128-d × 100K** vectors, a full `.vdb` checkpoint wrote **~52 MB** in **~0.079s**; flushing a **1K-row** segment wrote **~0.52 MB** in **~0.001s** — about **76×** faster and **100×** fewer bytes for that batch.
 
-class SegmentReader {
-public:
-    Status open();
-    Status read_all(std::vector<SegmentRow>& rows);
-};
-```
-
-**Benchmark takeaway** (`checkpoint_vs_segment_benchmark`): at **128-d × 100K** vectors, a full `.vdb` checkpoint wrote **~52 MB** in **~0.079s**; flushing a **1K-row** segment wrote **~0.52 MB** in **~0.001s** — about **76×** faster and **100×** fewer bytes for that batch. When batch == `N`, costs match (as expected).
-
-**Hard lessons so far:** same SoA + checksum discipline as `.vdb`; tombstone rows still reserve zeroed float slots so layout stays regular; reject live rows with wrong dims and tombstones that carry values; bad magic / bad checksum / missing file all fail closed.
-
-**Milestone 7 status:** tickets **#8–#9** done (learning note + `VECSEG01` library/sandbox/tests). **Next:** #10 memtable → #11 flush → MANIFEST → read path → compaction.  
+**Milestone 7 status:** tickets **#8–#13** done. **Next:** #14 harden / document cross-segment tombstones if needed, then **#15 compaction**.  
 Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
 
 ---
@@ -490,9 +489,9 @@ Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
 ## Repo layout
 
 ```text
-include/vectordb/   public headers (database, wal, segment, …)
+include/vectordb/   public headers (database, wal, segment, memtable, manifest, segment_store, …)
 src/                implementations
-tests/              GoogleTest (93 cases)
+tests/              GoogleTest (141 cases)
 tools/              CLI + format / wal / segment sandboxes
 benchmarks/         AoS vs SoA scans + checkpoint vs segment I/O
 notes/              design, memory-layout, WAL, segments learning notes
@@ -527,7 +526,7 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**Version 0.2 done** (Milestone 6). **Milestone 7 underway:** segment format shipped; memtable / flush / compaction next.  
+**Version 0.2 done** (Milestone 6). **Milestone 7:** #8–#13 complete (segments → memtable → MANIFEST → `SegmentStore`); compaction next.  
 Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---
