@@ -1,12 +1,30 @@
 #include "vectordb/memtable.hpp"
+#include "vectordb/segment.hpp"
 
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
+namespace fs = std::filesystem;
+
 using vectordb::Memtable;
+using vectordb::Metric;
+using vectordb::SegmentReader;
+using vectordb::SegmentRow;
 using vectordb::Status;
+using vectordb::flush_memtable;
+
+TEST(MemtableTest, ClearEmptiesEntries) {
+    Memtable mt(2);
+    ASSERT_EQ(mt.put(1, {1.0f, 0.0f}), Status::ok);
+    mt.clear();
+    EXPECT_EQ(mt.size(), 0u);
+    EXPECT_EQ(mt.live_count(), 0u);
+    EXPECT_FALSE(mt.get(1).has_value());
+    EXPECT_EQ(mt.dimensions(), 2u);
+}
 
 TEST(MemtableTest, StartsEmpty) {
     Memtable mt(2, 1024);
@@ -142,4 +160,98 @@ TEST(MemtableTest, IterationIncludesTombstones) {
     EXPECT_FALSE(it->second.is_deleted);
     ++it;
     EXPECT_EQ(it, mt.end());
+}
+
+class MemtableFlushTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        dir_ = fs::temp_directory_path() / "vectordb_memtable_flush_test";
+        fs::create_directories(dir_);
+        path_ = (dir_ / "segment-000001.vec").string();
+        fs::remove(path_);
+    }
+
+    void TearDown() override {
+        std::error_code ec;
+        fs::remove_all(dir_, ec);
+    }
+
+    fs::path dir_;
+    std::string path_;
+};
+
+TEST_F(MemtableFlushTest, FlushLiveRowsThenMemtableEmpty) {
+    Memtable mt(2);
+    ASSERT_EQ(mt.put(42, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(mt.put(7, {0.0f, 1.0f}), Status::ok);
+
+    ASSERT_EQ(flush_memtable(mt, path_, Metric::cosine), Status::ok);
+    EXPECT_EQ(mt.size(), 0u);
+    EXPECT_EQ(mt.live_count(), 0u);
+    EXPECT_FALSE(mt.get(42).has_value());
+
+    SegmentReader reader(path_);
+    ASSERT_EQ(reader.open(), Status::ok);
+    std::vector<SegmentRow> rows;
+    ASSERT_EQ(reader.read_all(rows), Status::ok);
+    ASSERT_EQ(rows.size(), 2u);
+
+    EXPECT_EQ(rows[0].id, 7u);
+    EXPECT_FALSE(rows[0].is_deleted);
+    ASSERT_EQ(rows[0].values.size(), 2u);
+    EXPECT_FLOAT_EQ(rows[0].values[0], 0.0f);
+    EXPECT_FLOAT_EQ(rows[0].values[1], 1.0f);
+
+    EXPECT_EQ(rows[1].id, 42u);
+    EXPECT_FALSE(rows[1].is_deleted);
+    ASSERT_EQ(rows[1].values.size(), 2u);
+    EXPECT_FLOAT_EQ(rows[1].values[0], 1.0f);
+    EXPECT_FLOAT_EQ(rows[1].values[1], 0.0f);
+}
+
+TEST_F(MemtableFlushTest, FlushWritesTombstones) {
+    Memtable mt(2);
+    ASSERT_EQ(mt.put(1, {3.0f, 4.0f}), Status::ok);
+    ASSERT_EQ(mt.put(2, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(mt.remove(2), Status::ok);
+
+    ASSERT_EQ(flush_memtable(mt, path_, Metric::euclidean), Status::ok);
+    EXPECT_EQ(mt.size(), 0u);
+
+    SegmentReader reader(path_);
+    ASSERT_EQ(reader.open(), Status::ok);
+    std::vector<SegmentRow> rows;
+    ASSERT_EQ(reader.read_all(rows), Status::ok);
+    ASSERT_EQ(rows.size(), 2u);
+
+    EXPECT_EQ(rows[0].id, 1u);
+    EXPECT_FALSE(rows[0].is_deleted);
+    ASSERT_EQ(rows[0].values.size(), 2u);
+
+    EXPECT_EQ(rows[1].id, 2u);
+    EXPECT_TRUE(rows[1].is_deleted);
+    EXPECT_TRUE(rows[1].values.empty());
+}
+
+TEST_F(MemtableFlushTest, FlushPastThresholdClearsNeedsFlush) {
+    Memtable mt(2, /*flush_threshold_rows=*/2);
+    ASSERT_EQ(mt.put(1, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(mt.put(2, {0.0f, 1.0f}), Status::ok);
+    ASSERT_TRUE(mt.needs_flush());
+
+    ASSERT_EQ(flush_memtable(mt, path_, Metric::cosine), Status::ok);
+    EXPECT_FALSE(mt.needs_flush());
+    EXPECT_EQ(mt.size(), 0u);
+}
+
+TEST_F(MemtableFlushTest, FlushEmptyWritesReadableSegment) {
+    Memtable mt(2);
+    ASSERT_EQ(flush_memtable(mt, path_, Metric::cosine), Status::ok);
+    EXPECT_EQ(mt.size(), 0u);
+
+    SegmentReader reader(path_);
+    ASSERT_EQ(reader.open(), Status::ok);
+    std::vector<SegmentRow> rows;
+    ASSERT_EQ(reader.read_all(rows), Status::ok);
+    EXPECT_TRUE(rows.empty());
 }
