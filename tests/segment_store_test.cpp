@@ -1,4 +1,5 @@
 #include "vectordb/segment_store.hpp"
+#include "vectordb/manifest.hpp"
 
 #include <gtest/gtest.h>
 
@@ -290,4 +291,92 @@ TEST_F(SegmentStoreTest, ReopenSeesFlushedTombstone) {
     SegmentStore reopened(dir_.string(), 2);
     ASSERT_EQ(reopened.open(), Status::ok);
     EXPECT_FALSE(reopened.get(9).has_value());
+}
+
+TEST_F(SegmentStoreTest, CompactNoOpWithFewerThanTwoSegments) {
+    SegmentStore store(dir_.string(), 2);
+    ASSERT_EQ(store.open(), Status::ok);
+    EXPECT_EQ(store.compact(), Status::ok);
+
+    ASSERT_EQ(store.put(1, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+    EXPECT_EQ(store.compact(), Status::ok);
+
+    const auto got = store.get(1);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_FLOAT_EQ((*got)[0], 1.0f);
+}
+
+TEST_F(SegmentStoreTest, CompactMergesSegmentsAndDropsTombstones) {
+    SegmentStore store(dir_.string(), 2, Metric::dot_product);
+    ASSERT_EQ(store.open(), Status::ok);
+
+    ASSERT_EQ(store.put(1, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(store.put(2, {0.0f, 1.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);  // segment-000001
+
+    ASSERT_EQ(store.put(1, {2.0f, 0.0f}), Status::ok);  // newer value for 1
+    ASSERT_EQ(store.flush(), Status::ok);  // segment-000002
+
+    ASSERT_EQ(store.remove(2), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);  // segment-000003 tombstone for 2
+
+    ASSERT_EQ(store.compact(), Status::ok);
+
+    vectordb::Manifest man;
+    ASSERT_EQ(man.load(dir_.string()), Status::ok);
+    ASSERT_EQ(man.segments().size(), 1u);
+    EXPECT_EQ(man.segments()[0], "segment-000004.vec");
+
+    EXPECT_FALSE(fs::exists(dir_ / "segment-000001.vec"));
+    EXPECT_FALSE(fs::exists(dir_ / "segment-000002.vec"));
+    EXPECT_FALSE(fs::exists(dir_ / "segment-000003.vec"));
+    EXPECT_TRUE(fs::exists(dir_ / "segment-000004.vec"));
+
+    const auto got1 = store.get(1);
+    ASSERT_TRUE(got1.has_value());
+    EXPECT_FLOAT_EQ((*got1)[0], 2.0f);
+    EXPECT_FALSE(store.get(2).has_value());
+}
+
+TEST_F(SegmentStoreTest, CompactPreservesMemtable) {
+    SegmentStore store(dir_.string(), 2);
+    ASSERT_EQ(store.open(), Status::ok);
+    ASSERT_EQ(store.put(1, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+    ASSERT_EQ(store.put(2, {0.0f, 1.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+    ASSERT_EQ(store.put(3, {1.0f, 1.0f}), Status::ok);  // only in memtable
+
+    ASSERT_EQ(store.compact(), Status::ok);
+
+    EXPECT_TRUE(store.get(1).has_value());
+    EXPECT_TRUE(store.get(2).has_value());
+    const auto got3 = store.get(3);
+    ASSERT_TRUE(got3.has_value());
+    EXPECT_FLOAT_EQ((*got3)[0], 1.0f);
+    EXPECT_FLOAT_EQ((*got3)[1], 1.0f);
+}
+
+TEST_F(SegmentStoreTest, ReopenAfterCompact) {
+    {
+        SegmentStore store(dir_.string(), 2);
+        ASSERT_EQ(store.open(), Status::ok);
+        ASSERT_EQ(store.put(1, {1.0f, 0.0f}), Status::ok);
+        ASSERT_EQ(store.flush(), Status::ok);
+        ASSERT_EQ(store.put(1, {0.0f, 1.0f}), Status::ok);
+        ASSERT_EQ(store.flush(), Status::ok);
+        ASSERT_EQ(store.compact(), Status::ok);
+    }
+
+    SegmentStore reopened(dir_.string(), 2);
+    ASSERT_EQ(reopened.open(), Status::ok);
+    const auto got = reopened.get(1);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_FLOAT_EQ((*got)[0], 0.0f);
+    EXPECT_FLOAT_EQ((*got)[1], 1.0f);
+
+    vectordb::Manifest man;
+    ASSERT_EQ(man.load(dir_.string()), Status::ok);
+    EXPECT_EQ(man.segments().size(), 1u);
 }

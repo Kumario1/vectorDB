@@ -261,4 +261,4 @@ When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump
 
 ## Milestone 7 status
 
-**#8–#14 complete** (segments, memtable, flush, MANIFEST, `SegmentStore` read path, cross-segment tombstones). **Next:** #15 compaction.
+**#8–#15 complete** — Milestone 7 LSM path beside v0.2: segments, memtable, flush, MANIFEST, newest-wins reads, tombstones, compaction. **Next:** Milestone 8 (metadata + filtering), or wire `SegmentStore` into `VectorDB`.
