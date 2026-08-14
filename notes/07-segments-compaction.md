@@ -223,6 +223,9 @@ Do **one ticket at a time**. Do not implement compaction before reads work; do n
 | Segment naming             | `segment-NNNNNN.vec` (+ `.meta` / `.idx` when needed)                                                                             | 2026-08 |
 | Flush threshold            | **row count** first (bytes threshold later)                                                                                       | 2026-08 |
 | Segment format             | `VECSEG01` SoA: magic/version/dims/count/metric + ids[] + deleted[] + floats[count×dims] + checksum; tombstones write zero floats | 2026-08 |
+| Tombstones on disk         | **Inline** in each segment via `deleted[]` (+ zero floats); no separate `.meta` tombstone file                                    | 2026-08 |
+| Newest-wins delete         | `SegmentStore::remove` → `Memtable::tombstone` even if id only exists in an older segment                                          | 2026-08 |
+| M7 top-k                   | Brute-force scan of visible live vectors (memtable + segments); O(n log k) heap — OK for learning                                 | 2026-08 |
 | v0.2 `.vdb` + WAL          | Keep working; segment path built beside until integration                                                                         | 2026-08 |
 | Compaction trigger         | Manual API first (`compact()`); auto policy later                                                                                 | 2026-08 |
 | MANIFEST atomicity         | Write temp + rename over `MANIFEST` (document in #12)                                                                             | 2026-08 |
@@ -233,8 +236,8 @@ Do **one ticket at a time**. Do not implement compaction before reads work; do n
 
 ## Open questions (resolve during implementation)
 
-1. Does one segment file embed tombstones inline, or separate `.meta`?
-2. Exact top-k during M7: scan all visible vectors (memtable + all live segments) — acceptable for learning?
+1. ~~Does one segment file embed tombstones inline, or separate `.meta`?~~ → **Inline** (`deleted[]`).
+2. ~~Exact top-k during M7: scan all visible vectors — acceptable for learning?~~ → **Yes.**
 3. When do we stop using monolithic `.vdb` as the primary store?
 
 ---
@@ -258,4 +261,4 @@ When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump
 
 ## Milestone 7 status
 
-**#8–#12 complete.** **#13 complete:** `SegmentStore` newest-wins `get`/`search` (memtable + segments, top-k heap); `remove` uses `Memtable::tombstone`. **Next:** #14 harden tombstones across segments / #15 compaction.
+**#8–#14 complete** (segments, memtable, flush, MANIFEST, `SegmentStore` read path, cross-segment tombstones). **Next:** #15 compaction.
