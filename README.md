@@ -41,7 +41,7 @@ flowchart LR
 | SegmentStore read path | Newest-wins `get` / top-k `search`; LSM `tombstone` delete (M7 #13) |
 | Checkpoint vs segment I/O | Microbench: flush batch ≪ full `.vdb` rewrite |
 | Tests | **141/141** CTest passing |
-| Compaction | **Next** (M7 #15); #14 tombstones across segments largely covered by #13 |
+| Compaction | **Next** (M7 #15); #14 cross-segment tombstones documented + tested |
 
 ```mermaid
 pie title C++ lines by area (~3,900 total)
@@ -481,7 +481,7 @@ flowchart LR
 
 **Benchmark takeaway** (`checkpoint_vs_segment_benchmark`): at **128-d × 100K** vectors, a full `.vdb` checkpoint wrote **~52 MB** in **~0.079s**; flushing a **1K-row** segment wrote **~0.52 MB** in **~0.001s** — about **76×** faster and **100×** fewer bytes for that batch.
 
-**Milestone 7 status:** tickets **#8–#13** done. **Next:** #14 harden / document cross-segment tombstones if needed, then **#15 compaction**.  
+**Milestone 7 status:** tickets **#8–#14** done. **Next:** **#15 compaction**.  
 Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
 
 ---
@@ -526,7 +526,7 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**Version 0.2 done** (Milestone 6). **Milestone 7:** #8–#13 complete (segments → memtable → MANIFEST → `SegmentStore`); compaction next.  
+**Version 0.2 done** (Milestone 6). **Milestone 7:** #8–#14 complete; compaction (#15) next.  
 Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---

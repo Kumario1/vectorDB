@@ -137,6 +137,39 @@ TEST_F(SegmentStoreTest, FlushedTombstoneHidesOlderSegment) {
     }
 }
 
+TEST_F(SegmentStoreTest, TombstoneHidesMultipleOlderVersions) {
+    // live in seg1, updated in seg2, deleted in seg3 → gone
+    SegmentStore store(dir_.string(), 2, Metric::dot_product);
+    ASSERT_EQ(store.open(), Status::ok);
+
+    ASSERT_EQ(store.put(8, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+
+    ASSERT_EQ(store.put(8, {0.0f, 1.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+
+    ASSERT_EQ(store.remove(8), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+
+    EXPECT_FALSE(store.get(8).has_value());
+
+    // sibling id still visible from an older segment
+    ASSERT_EQ(store.put(9, {3.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+    // reopen path: only segments
+    SegmentStore reopened(dir_.string(), 2, Metric::dot_product);
+    ASSERT_EQ(reopened.open(), Status::ok);
+    EXPECT_FALSE(reopened.get(8).has_value());
+    const auto got9 = reopened.get(9);
+    ASSERT_TRUE(got9.has_value());
+    EXPECT_FLOAT_EQ((*got9)[0], 3.0f);
+
+    const auto results = reopened.search({1.0f, 0.0f}, 10);
+    for (const auto& r : results) {
+        EXPECT_NE(r.id, 8u);
+    }
+}
+
 TEST_F(SegmentStoreTest, SearchMatchesGetVisibility) {
     SegmentStore store(dir_.string(), 2, Metric::dot_product);
     ASSERT_EQ(store.open(), Status::ok);
