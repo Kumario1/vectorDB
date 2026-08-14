@@ -21,6 +21,7 @@ public:
     Status put(std::uint64_t id, const std::vector<float>& values);
     Status remove(std::uint64_t id);
     Status flush();  // flush_memtable -> new segment name -> Manifest::add -> replace
+    Status compact();
 
     std::optional<std::vector<float>> get(std::uint64_t id) const;
     std::vector<SearchResult> search(const std::vector<float>& query, std::size_t k) const;

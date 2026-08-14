@@ -10,6 +10,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <cstdio>
 
 namespace vectordb {
 namespace {
@@ -77,6 +78,96 @@ Status SegmentStore::flush() {
     st = manifest_.replace(dir_);
     if (st != Status::ok) {
         return st;
+    }
+
+    return Status::ok;
+}
+
+Status SegmentStore::compact() {
+    /*Algorithm
+If manifest_.segments().size() < 2 → Status::ok (nothing to do).
+Snapshot old = manifest_.segments() (copy the filenames).
+Build live: map<id, vector<float>> by walking segments newest → oldest (same as search’s segment loop):
+seen set; skip if already seen
+tombstone → mark seen, do not add to live
+live → add to live
+Do not include memtable entries in this merge (unless you explicitly flush first in the API — keep it simple: segments only).
+Choose new name: segment-{old.size()+1} zero-padded, or max existing number + 1.
+SegmentWriter: open → append each live row (sorted by id is nice, not required) → finish.
+Build new manifest list: clear() + add(new_name) + replace(dir_).
+Only after replace succeeds: std::remove each old filename under dir_.
+If replace fails: leave old MANIFEST; new file may be an orphan (OK for learning).
+Return ok.*/
+
+    if (manifest_.segments().size() < 2) {
+        return Status::ok;
+    }
+
+    std::vector<std::string> old = manifest_.segments();
+    std::unordered_map<std::uint64_t, std::vector<float>> live;
+    std::unordered_set<std::uint64_t> seen;
+
+    for (auto it = manifest_.segments().rbegin(); it != manifest_.segments().rend(); ++it) {
+        const std::string path = dir_ + "/" + *it;
+        SegmentReader reader(path);
+        if (reader.open() != Status::ok) {
+            continue;
+        }
+        
+        std::vector<SegmentRow> rows;
+        if (reader.read_all(rows) != Status::ok) {
+            continue;
+        }
+
+        for (const auto& row : rows) {
+            if (seen.count(row.id)) {
+                continue;
+            }
+            seen.insert(row.id);
+            if (row.is_deleted) {
+                continue;
+            }
+            live[row.id] = row.values;
+        }
+    }
+
+    std::uint64_t new_id = manifest_.segments().size() + 1;
+    std::ostringstream oss;
+    oss << "segment-" << std::setw(6) << std::setfill('0') << new_id << ".vec";
+    std::string new_name = oss.str();
+    std::string new_path = dir_ + "/" + new_name;
+    SegmentWriter writer(new_path);
+
+    if (writer.open(memtable_.dimensions(), metric_) != Status::ok) {
+        return Status::invalid_argument;
+    }
+
+    for (const auto& [id, values] : live) {
+        SegmentRow row;
+        row.id = id;
+        row.is_deleted = false;
+        row.values = values;
+        if (writer.append(row) != Status::ok) {
+            return Status::invalid_argument;
+        }
+    }
+    
+    if (writer.finish() != Status::ok) {
+        return Status::invalid_argument;
+    }
+
+    Manifest next;
+    next.add(new_name);
+    Status st = next.replace(dir_);
+    if (st != Status::ok) {
+        return Status::invalid_argument;
+    }
+    manifest_.clear();
+    manifest_.add(new_name);
+
+    for (const auto& old_name : old) {
+        std::string old_path = dir_ + "/" + old_name;
+        std::remove(old_path.c_str());
     }
 
     return Status::ok;

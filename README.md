@@ -21,7 +21,8 @@ flowchart LR
   SegFmt --> Mem[Memtable + flush]
   Mem --> Man[MANIFEST]
   Man --> Read[SegmentStore read path]
-  Read --> Comp[Compaction — next]
+  Read --> Comp[Compaction]
+  Comp --> M8[Metadata — next]
 ```
 
 | Topic | Progress |
@@ -41,7 +42,8 @@ flowchart LR
 | SegmentStore read path | Newest-wins `get` / top-k `search`; LSM `tombstone` delete (M7 #13) |
 | Checkpoint vs segment I/O | Microbench: flush batch ≪ full `.vdb` rewrite |
 | Tests | **141/141** CTest passing |
-| Compaction | **Next** (M7 #15); #14 cross-segment tombstones documented + tested |
+| Compaction | Done (M7 #15): merge all segments → one file + MANIFEST swap |
+| Milestone 8 | **Next:** metadata storage + filtering |
 
 ```mermaid
 pie title C++ lines by area (~3,900 total)
@@ -481,7 +483,7 @@ flowchart LR
 
 **Benchmark takeaway** (`checkpoint_vs_segment_benchmark`): at **128-d × 100K** vectors, a full `.vdb` checkpoint wrote **~52 MB** in **~0.079s**; flushing a **1K-row** segment wrote **~0.52 MB** in **~0.001s** — about **76×** faster and **100×** fewer bytes for that batch.
 
-**Milestone 7 status:** tickets **#8–#14** done. **Next:** **#15 compaction**.  
+**Milestone 7 status:** tickets **#8–#15** done (full LSM learning path beside v0.2). **Next:** Milestone 8 metadata / filtering, or integrate `SegmentStore` into `VectorDB`.  
 Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
 
 ---
@@ -526,7 +528,7 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**Version 0.2 done** (Milestone 6). **Milestone 7:** #8–#14 complete; compaction (#15) next.  
+**Version 0.2 done** (Milestone 6). **Milestone 7 done** (#8–#15). **Next:** Milestone 8 — metadata and filtering.  
 Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---
