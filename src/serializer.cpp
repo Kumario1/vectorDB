@@ -219,7 +219,7 @@ Status load_database(const std::string& path, VectorDB& db) {
     }
 
     //build database
-    db = VectorDB(dimensions, metric_from_u32(metric));
+    db = VectorDB(dimensions, metric_from_u32(metric), StorageMode::legacy);
 
     for (std::size_t i = 0; i < record_count; ++i){
         std::span<const float> vals(values.data() + i * dimensions, dimensions);

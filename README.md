@@ -22,27 +22,29 @@ flowchart LR
   Mem --> Man[MANIFEST]
   Man --> Read[SegmentStore read path]
   Read --> Comp[Compaction]
-  Comp --> M8[Metadata — next]
+  Comp --> LSM[VectorDB default LSM]
+  LSM --> M8[Metadata — next]
 ```
 
 | Topic | Progress |
 |-------|----------|
 | Design | Locked: fixed dims, `float`, `uint64_t` ids, tombstones, `Status` |
 | Memory layout | AoS + SoA stores; scan benchmark |
-| ID index + CRUD | `IdIndex` + `VectorDB` insert/get/update/remove |
+| ID index + CRUD | `IdIndex` + `VectorDB` insert/get/update/remove; default backend is `SegmentStore` (LSM) |
 | Similarity | Cosine, dot, squared Euclidean |
 | Exact top-k | Min-heap search · tag `v0.1-in-memory-exact` |
-| Binary persistence | Save/load + checksum (`.vdb`) |
-| WAL + recovery | Log-before-mutate, `fsync`, open/replay, checkpoint + CHECKPOINT record |
+| Binary persistence | Save/load + checksum (`.vdb`) — `StorageMode::legacy` |
+| WAL + recovery | Log-before-mutate, `fsync`, open/replay, checkpoint — `StorageMode::legacy` |
 | Crash injection | Fork harness + matrix (process-crash scope) |
-| **Version 0.2** | **Milestone 6 complete** |
+| **Version 0.2** | **Milestone 6 complete** (kept as explicit legacy path) |
 | Segment file format | `VECSEG01` writer/reader + sandbox + tests (M7 #9) |
 | Memtable + flush | `std::map` memtable, row-count threshold, `flush_memtable` (M7 #10–#11) |
 | MANIFEST | `VECMAN01` load + temp/fsync/rename replace (M7 #12) |
 | SegmentStore read path | Newest-wins `get` / top-k `search`; LSM `tombstone` delete (M7 #13) |
 | Checkpoint vs segment I/O | Microbench: flush batch ≪ full `.vdb` rewrite |
-| Tests | **141/141** CTest passing |
+| Tests | **157/157** CTest passing |
 | Compaction | Done (M7 #15): merge all segments → one file + MANIFEST swap |
+| VectorDB default | **LSM** (`SegmentStore`); memtable until `open_lsm(dir)`; `.vdb`+WAL is `StorageMode::legacy` |
 | Milestone 8 | **Next:** metadata storage + filtering |
 
 ```mermaid
@@ -58,54 +60,43 @@ pie title C++ lines by area (~3,900 total)
 
 ## Architecture
 
-Version **0.2** (live path): one in-memory SoA store + `.vdb` snapshot + `.wal`.  
-Milestone **7** (building beside it): memtable → flush → MANIFEST → `SegmentStore` read path done; compaction next — not wired into `VectorDB` yet.
+Version **0.2** (legacy path): one in-memory SoA store + `.vdb` snapshot + `.wal` via `StorageMode::legacy`.  
+**Default `VectorDB` is LSM:** memtable-only until `open_lsm(dir)`, then segments + MANIFEST. WAL+LSM is still deferred.
 
 ```mermaid
 flowchart TB
-  subgraph API["Public API — VectorDB (0.2)"]
-    insert["insert / update / remove / get"]
-    search["search(query, k)"]
-    save["save / load"]
-    open["open / checkpoint"]
+  subgraph API["Public API — VectorDB"]
+    ctor["VectorDB dims metric"]
+    crud["insert / update / remove / get / search"]
+    lsm["open_lsm / flush / compact"]
+    v02["save / load / open / checkpoint / enable_wal"]
   end
 
-  subgraph Memory["In-memory state"]
-    store["FlatVectorStore\n(SoA layout)"]
-    index["IdIndex\nid → position"]
-    meta["metric_ + active_count_"]
-    walptr["optional WalWriter"]
+  subgraph LSM["Default — StorageMode::lsm"]
+    mt["Memtable"]
+    ss["SegmentStore"]
+    man["MANIFEST"]
+    segfile["segment-*.vec"]
   end
 
-  subgraph Disk["On disk — 0.2"]
+  subgraph Legacy["StorageMode::legacy"]
+    store["FlatVectorStore + IdIndex"]
     snap[".vdb snapshot"]
     wallog[".wal append-only log"]
   end
 
-  subgraph M7["Milestone 7 — beside 0.2"]
-    seglib["SegmentWriter / SegmentReader"]
-    mt["Memtable"]
-    man["Manifest VECMAN01"]
-    ss["SegmentStore\nnewest-wins get/search"]
-    segfile["segment-*.vec"]
-  end
-
-  insert --> walptr
-  insert --> index
-  insert --> store
-  search --> store
-  save --> snap
-  open --> snap
-  open --> wallog
-  open --> store
-  checkpoint --> snap
-  checkpoint --> wallog
-  mt -->|"flush"| seglib
-  seglib --> segfile
+  ctor --> LSM
+  ctor --> Legacy
+  crud --> ss
+  crud --> store
+  lsm --> ss
   ss --> mt
   ss --> man
-  ss --> seglib
+  mt -->|"flush"| segfile
   man -.-> segfile
+  v02 --> store
+  v02 --> snap
+  v02 --> wallog
 ```
 
 ---
@@ -134,7 +125,9 @@ struct SearchResult {
 
 class VectorDB {
 public:
-    explicit VectorDB(std::size_t dimensions, Metric metric = Metric::cosine);
+    explicit VectorDB(std::size_t dimensions,
+                      Metric metric = Metric::cosine,
+                      StorageMode mode = StorageMode::lsm);
 
     Status insert(std::uint64_t id, std::span<const float> values);
     Status update(std::uint64_t id, std::span<const float> values);
@@ -439,29 +432,32 @@ Status VectorDB::checkpoint(const std::string& snapshot_path) {
 
 ---
 
-## Segments (LSM path — in progress)
+## Segments (LSM path — default VectorDB)
 
 **What I learned:** A `.vdb` checkpoint is a full **rewrite** — cost grows with **total** `N`, even if you only inserted a few rows since the last save. LSM-style storage flips that: keep a small mutable **memtable**, and when it fills, **flush** only that batch into a new immutable **segment** file. Old segments stay untouched; updates/deletes become newer rows or tombstones (newest-wins). Compaction merges later to reclaim garbage.
 
+`VectorDB` now defaults to this path. Constructing `VectorDB(dims, metric)` starts **memtable-only**. `open_lsm(dir)` loads MANIFEST and enables flush/compact to disk. Durability this milestone is **segments + MANIFEST only**. `.vdb` + WAL stay on `StorageMode::legacy`. WAL replay into the memtable is still deferred.
+
 **Database ideas:**
-- Checkpoint (0.2) = O(N) bytes + O(N) work per save.
+- Checkpoint (0.2 / legacy) = O(N) bytes + O(N) work per save.
 - Segment flush = O(batch) — write amplification tracks recent writes, not history.
 - Segments are **immutable** after `finish()` — simplifies crash safety and future concurrent readers.
 - **MANIFEST** is the source of truth for live segment files (never “glob `*.vec`”).
-- Build the LSM stack **beside** the live `.vdb` + WAL path; wire into `VectorDB` later.
+- `insert` / `update` / `remove` keep the same `Status` contracts on LSM (`duplicate_id` / `not_found`).
 
 ```mermaid
 flowchart LR
-  subgraph today["Version 0.2 — live"]
-    ram["FlatVectorStore"] --> vdb["rewrite .vdb"]
-  end
-
-  subgraph m7["Milestone 7 — beside 0.2"]
+  subgraph lsm["Default — LSM"]
     mt["Memtable"] -->|"flush"| seg["segment-NNNNNN.vec"]
     seg --> man["MANIFEST"]
     ss["SegmentStore"] --> mt
     ss --> man
     ss --> seg
+  end
+
+  subgraph legacy["StorageMode::legacy"]
+    ram["FlatVectorStore"] --> vdb["rewrite .vdb"]
+    ram --> wal[".wal"]
   end
 ```
 
@@ -483,7 +479,7 @@ flowchart LR
 
 **Benchmark takeaway** (`checkpoint_vs_segment_benchmark`): at **128-d × 100K** vectors, a full `.vdb` checkpoint wrote **~52 MB** in **~0.079s**; flushing a **1K-row** segment wrote **~0.52 MB** in **~0.001s** — about **76×** faster and **100×** fewer bytes for that batch.
 
-**Milestone 7 status:** tickets **#8–#15** done (full LSM learning path beside v0.2). **Next:** Milestone 8 metadata / filtering, or integrate `SegmentStore` into `VectorDB`.  
+**Milestone 7 status:** tickets **#8–#15** done. **`VectorDB` default is LSM** (`SegmentStore`); `.vdb`+WAL is `StorageMode::legacy`; WAL+LSM still deferred. **Next:** Milestone 8 metadata / filtering.  
 Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
 
 ---
@@ -493,7 +489,7 @@ Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
 ```text
 include/vectordb/   public headers (database, wal, segment, memtable, manifest, segment_store, …)
 src/                implementations
-tests/              GoogleTest (141 cases)
+tests/              GoogleTest (157 cases)
 tools/              CLI + format / wal / segment sandboxes
 benchmarks/         AoS vs SoA scans + checkpoint vs segment I/O
 notes/              design, memory-layout, WAL, segments learning notes
@@ -528,7 +524,7 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**Version 0.2 done** (Milestone 6). **Milestone 7 done** (#8–#15). **Next:** Milestone 8 — metadata and filtering.  
+**Version 0.2 done** (Milestone 6, `StorageMode::legacy`). **Milestone 7 done** (#8–#15); VectorDB default is LSM. **Next:** Milestone 8 — metadata and filtering.  
 Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---

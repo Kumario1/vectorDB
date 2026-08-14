@@ -49,6 +49,7 @@ add_executable(vector_store_test
     tests/memtable_test.cpp
     tests/manifest_test.cpp
     tests/segment_store_test.cpp
+    tests/vectordb_lsm_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE
@@ -73,6 +74,11 @@ add_executable(checkpoint_vs_segment_benchmark
     benchmarks/checkpoint_vs_segment_benchmark.cpp
 )
 target_link_libraries(checkpoint_vs_segment_benchmark PRIVATE vectordb)
+
+add_executable(lsm_vs_checkpoint_ingest_benchmark
+    benchmarks/lsm_vs_checkpoint_ingest_benchmark.cpp
+)
+target_link_libraries(lsm_vs_checkpoint_ingest_benchmark PRIVATE vectordb)
 
 add_executable(format_sandbox tools/format_sandbox.cpp)
 add_executable(wal_sandbox tools/wal_sandbox.cpp)

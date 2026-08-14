@@ -23,7 +23,7 @@ constexpr float kCrashCheckpointB[] = {5.0f, 6.0f};
 
 void child_crashing_insert(const std::string& wal_path, vectordb::CrashPoint point) {
     vectordb::set_crash_point(point);
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     if (db.enable_wal(wal_path) != vectordb::Status::ok) {
         _exit(10);
     }
@@ -36,7 +36,7 @@ void child_crashing_insert(const std::string& wal_path, vectordb::CrashPoint poi
 void child_crashing_checkpoint(const std::string& wal_path,
                                const std::string& snap_path,
                                vectordb::CrashPoint point) {
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     if (db.enable_wal(wal_path) != vectordb::Status::ok) {
         _exit(20);
     }
@@ -222,7 +222,7 @@ TEST_F(WalTest, EmptyFileEof) {
 
 TEST_F(WalTest, VectorDBEnableWalLogsInsertUpdateDelete) {
     {
-        vectordb::VectorDB db(2);
+        vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         ASSERT_EQ(db.enable_wal(path_), vectordb::Status::ok);
 
         const float a[] = {1.0f, 2.0f};
@@ -258,7 +258,7 @@ TEST_F(WalTest, VectorDBEnableWalLogsInsertUpdateDelete) {
 
 TEST_F(WalTest, DuplicateInsertDoesNotWriteWal) {
     {
-        vectordb::VectorDB db(2);
+        vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         ASSERT_EQ(db.enable_wal(path_), vectordb::Status::ok);
         const float v[] = {1.0f, 0.0f};
         ASSERT_EQ(db.insert(1, v), vectordb::Status::ok);
@@ -273,7 +273,7 @@ TEST_F(WalTest, DuplicateInsertDoesNotWriteWal) {
 
 TEST_F(WalTest, UpdateMissingDoesNotWriteWal) {
     {
-        vectordb::VectorDB db(2);
+        vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         ASSERT_EQ(db.enable_wal(path_), vectordb::Status::ok);
         const float v[] = {1.0f, 0.0f};
         EXPECT_EQ(db.update(999, v), vectordb::Status::not_found);
@@ -285,7 +285,7 @@ TEST_F(WalTest, UpdateMissingDoesNotWriteWal) {
 
 TEST_F(WalTest, RemoveMissingDoesNotWriteWal) {
     {
-        vectordb::VectorDB db(2);
+        vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         ASSERT_EQ(db.enable_wal(path_), vectordb::Status::ok);
         EXPECT_EQ(db.remove(999), vectordb::Status::not_found);
     }
@@ -298,7 +298,7 @@ TEST_F(WalTest, OpenReplaysWalWithoutSnapshot) {
     const float a[] = {1.0f, 0.0f};
     const float b[] = {0.0f, 1.0f};
     {
-        vectordb::VectorDB db(2);
+        vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         ASSERT_EQ(db.enable_wal(path_), vectordb::Status::ok);
         ASSERT_EQ(db.insert(1, a), vectordb::Status::ok);
         ASSERT_EQ(db.insert(2, b), vectordb::Status::ok);
@@ -306,7 +306,7 @@ TEST_F(WalTest, OpenReplaysWalWithoutSnapshot) {
     }
 
     {
-        vectordb::VectorDB loaded(2);
+        vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
         EXPECT_EQ(loaded.size(), 1u);
         EXPECT_FALSE(loaded.get(1).has_value());
@@ -330,7 +330,7 @@ TEST_F(WalTest, CheckpointThenOpenUsesSnapshotOnly) {
     const float a[] = {1.0f, 2.0f};
     const float b[] = {5.0f, 6.0f};
     {
-        vectordb::VectorDB db(2);
+        vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         ASSERT_EQ(db.enable_wal(path_), vectordb::Status::ok);
         ASSERT_EQ(db.insert(10, a), vectordb::Status::ok);
         ASSERT_EQ(db.insert(20, b), vectordb::Status::ok);
@@ -347,7 +347,7 @@ TEST_F(WalTest, CheckpointThenOpenUsesSnapshotOnly) {
         EXPECT_EQ(records[0].id, 30u);
     }
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open(snap, path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 3u);
     EXPECT_TRUE(loaded.get(10).has_value());
@@ -358,7 +358,7 @@ TEST_F(WalTest, CheckpointThenOpenUsesSnapshotOnly) {
 TEST_F(WalTest, CrashAfterWalFlushRecoversInsertOnReopen) {
     fork_crashing_insert(path_, vectordb::CrashPoint::AfterWalFlush);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 1u);
     ASSERT_TRUE(loaded.get(kCrashTestId).has_value());
@@ -369,7 +369,7 @@ TEST_F(WalTest, CrashAfterWalFlushRecoversInsertOnReopen) {
 TEST_F(WalTest, CrashBeforeWalAppendDoesNotRecoverInsert) {
     fork_crashing_insert(path_, vectordb::CrashPoint::BeforeWalAppend);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 0u);
     EXPECT_FALSE(loaded.get(kCrashTestId).has_value());
@@ -382,7 +382,7 @@ TEST_F(WalTest, CrashBeforeWalAppendDoesNotRecoverInsert) {
 TEST_F(WalTest, CrashAfterWalAppendBeforeFlushRecoversInsertOnReopen) {
     fork_crashing_insert(path_, vectordb::CrashPoint::AfterWalAppendBeforeFlush);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 1u);
     ASSERT_TRUE(loaded.get(kCrashTestId).has_value());
@@ -391,7 +391,7 @@ TEST_F(WalTest, CrashAfterWalAppendBeforeFlushRecoversInsertOnReopen) {
 TEST_F(WalTest, CrashAfterMemoryApplyRecoversInsertOnReopen) {
     fork_crashing_insert(path_, vectordb::CrashPoint::AfterMemoryApply);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open("", path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 1u);
     ASSERT_TRUE(loaded.get(kCrashTestId).has_value());
@@ -403,7 +403,7 @@ TEST_F(WalTest, CrashAfterCheckpointSnapshotRecoversFromSnapAndWal) {
     const std::string snap = (dir_ / "crash_after_snap.vdb").string();
     fork_crashing_checkpoint(path_, snap, vectordb::CrashPoint::AfterCheckpointSnapshot);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open(snap, path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 2u);
     EXPECT_TRUE(loaded.get(10).has_value());
@@ -415,7 +415,7 @@ TEST_F(WalTest, CrashAfterCheckpointBeforeTruncateDoesNotDoubleApply) {
     fork_crashing_checkpoint(
         path_, snap, vectordb::CrashPoint::AfterCheckpointBeforeTruncateWal);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open(snap, path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 2u);
     EXPECT_TRUE(loaded.get(10).has_value());
@@ -444,7 +444,7 @@ TEST_F(WalTest, CheckpointWritesCheckpointRecordBeforeTruncate) {
     EXPECT_EQ(records[2].lsn, 3u);
     EXPECT_EQ(records[2].checkpoint_lsn, 2u);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(loaded.open(snap, path_), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 2u);
     EXPECT_TRUE(loaded.get(10).has_value());
