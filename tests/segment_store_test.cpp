@@ -380,3 +380,47 @@ TEST_F(SegmentStoreTest, ReopenAfterCompact) {
     ASSERT_EQ(man.load(dir_.string()), Status::ok);
     EXPECT_EQ(man.segments().size(), 1u);
 }
+
+TEST_F(SegmentStoreTest, MemtableOnlyUntilOpen) {
+    SegmentStore store("", 2);
+    ASSERT_EQ(store.put(1, {1.0f, 0.0f}), Status::ok);
+    const auto got = store.get(1);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_FLOAT_EQ((*got)[0], 1.0f);
+    EXPECT_EQ(store.flush(), Status::invalid_argument);
+    EXPECT_EQ(store.compact(), Status::invalid_argument);
+    EXPECT_EQ(store.open(), Status::invalid_argument);
+
+    ASSERT_EQ(store.open(dir_.string()), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);
+    EXPECT_TRUE(fs::exists(dir_ / "segment-000001.vec"));
+}
+
+TEST_F(SegmentStoreTest, FlushAfterCompactUsesMonotonicId) {
+    SegmentStore store(dir_.string(), 2);
+    ASSERT_EQ(store.open(), Status::ok);
+    ASSERT_EQ(store.put(1, {1.0f, 0.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);  // segment-000001
+    ASSERT_EQ(store.put(2, {0.0f, 1.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);  // segment-000002
+    ASSERT_EQ(store.compact(), Status::ok);  // segment-000003
+    ASSERT_EQ(store.put(3, {1.0f, 1.0f}), Status::ok);
+    ASSERT_EQ(store.flush(), Status::ok);  // must be 000004, not reuse 000002
+
+    vectordb::Manifest man;
+    ASSERT_EQ(man.load(dir_.string()), Status::ok);
+    ASSERT_EQ(man.segments().size(), 2u);
+    EXPECT_EQ(man.segments()[0], "segment-000003.vec");
+    EXPECT_EQ(man.segments()[1], "segment-000004.vec");
+    EXPECT_TRUE(fs::exists(dir_ / "segment-000004.vec"));
+    EXPECT_FALSE(fs::exists(dir_ / "segment-000002.vec"));
+}
+
+TEST_F(SegmentStoreTest, AutoFlushWhenDirSetAndThresholdReached) {
+    SegmentStore store(dir_.string(), 2, Metric::cosine, /*flush_threshold_rows=*/2);
+    ASSERT_EQ(store.open(), Status::ok);
+    ASSERT_EQ(store.put(1, {1.0f, 0.0f}), Status::ok);
+    EXPECT_FALSE(fs::exists(dir_ / "segment-000001.vec"));
+    ASSERT_EQ(store.put(2, {0.0f, 1.0f}), Status::ok);
+    EXPECT_TRUE(fs::exists(dir_ / "segment-000001.vec"));
+}

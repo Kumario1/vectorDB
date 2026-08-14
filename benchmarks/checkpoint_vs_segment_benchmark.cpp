@@ -30,7 +30,7 @@ double median_seconds(Fn&& fn, int runs = 5) {
 }
 
 vectordb::VectorDB make_db(std::size_t dims, std::size_t n) {
-    vectordb::VectorDB db(dims, vectordb::Metric::cosine);
+    vectordb::VectorDB db(dims, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     std::vector<float> values(dims, 1.0f);
     for (std::size_t i = 0; i < n; ++i) {
         if (db.insert(static_cast<std::uint64_t>(i), values) != vectordb::Status::ok) {

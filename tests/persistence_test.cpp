@@ -36,14 +36,14 @@ protected:
 };
 
 TEST_F(PersistenceSaveTest, EmptyDatabaseIsFortyBytes) {
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(vectordb::save_database(db, path_), vectordb::Status::ok);
     EXPECT_EQ(file_size(path_), expected_size(0, 2));
     EXPECT_EQ(file_size(path_), 40u);
 }
 
 TEST_F(PersistenceSaveTest, OneVectorMatchesFormula) {
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     const float v[] = {1.0f, 2.0f};
     ASSERT_EQ(db.insert(1, v), vectordb::Status::ok);
     ASSERT_EQ(vectordb::save_database(db, path_), vectordb::Status::ok);
@@ -53,7 +53,7 @@ TEST_F(PersistenceSaveTest, OneVectorMatchesFormula) {
 }
 
 TEST_F(PersistenceSaveTest, IncludesTombstonesInPhysicalCount) {
-    vectordb::VectorDB db(3);
+    vectordb::VectorDB db(3, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     const float a[] = {1.0f, 0.0f, 0.0f};
     const float b[] = {0.0f, 1.0f, 0.0f};
     ASSERT_EQ(db.insert(10, a), vectordb::Status::ok);
@@ -68,13 +68,13 @@ TEST_F(PersistenceSaveTest, IncludesTombstonesInPhysicalCount) {
 }
 
 TEST_F(PersistenceSaveTest, BadPathReturnsInvalidArgument) {
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     const auto bad = (dir_ / "no_such_dir" / "x.vdb").string();
     EXPECT_EQ(vectordb::save_database(db, bad), vectordb::Status::invalid_argument);
 }
 
 TEST_F(PersistenceSaveTest, StartsWithMagic) {
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(vectordb::save_database(db, path_), vectordb::Status::ok);
 
     std::ifstream in(path_, std::ios::binary);
@@ -87,10 +87,10 @@ TEST_F(PersistenceSaveTest, StartsWithMagic) {
 class PersistenceRoundTripTest : public PersistenceSaveTest {};
 
 TEST_F(PersistenceRoundTripTest, EmptyRoundTrip) {
-    vectordb::VectorDB original(4, vectordb::Metric::dot_product);
+    vectordb::VectorDB original(4, vectordb::Metric::dot_product, vectordb::StorageMode::legacy);
     ASSERT_EQ(vectordb::save_database(original, path_), vectordb::Status::ok);
 
-    vectordb::VectorDB loaded(1);  // wrong dims on purpose — load must replace
+    vectordb::VectorDB loaded(1, vectordb::Metric::cosine, vectordb::StorageMode::legacy);  // wrong dims on purpose — load must replace
     ASSERT_EQ(vectordb::load_database(path_, loaded), vectordb::Status::ok);
     EXPECT_EQ(loaded.dimensions(), 4u);
     EXPECT_EQ(loaded.metric(), vectordb::Metric::dot_product);
@@ -99,7 +99,7 @@ TEST_F(PersistenceRoundTripTest, EmptyRoundTrip) {
 }
 
 TEST_F(PersistenceRoundTripTest, VectorsAndSearchSurvive) {
-    vectordb::VectorDB original(2, vectordb::Metric::cosine);
+    vectordb::VectorDB original(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     const float a[] = {1.0f, 0.0f};
     const float b[] = {0.0f, 1.0f};
     const float c[] = {0.7f, 0.7f};
@@ -108,7 +108,7 @@ TEST_F(PersistenceRoundTripTest, VectorsAndSearchSurvive) {
     ASSERT_EQ(original.insert(3, c), vectordb::Status::ok);
     ASSERT_EQ(vectordb::save_database(original, path_), vectordb::Status::ok);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(vectordb::load_database(path_, loaded), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 3u);
     EXPECT_EQ(loaded.physical_size(), 3u);
@@ -131,7 +131,7 @@ TEST_F(PersistenceRoundTripTest, VectorsAndSearchSurvive) {
 }
 
 TEST_F(PersistenceRoundTripTest, TombstonesPreserved) {
-    vectordb::VectorDB original(2);
+    vectordb::VectorDB original(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     const float a[] = {1.0f, 0.0f};
     const float b[] = {0.0f, 1.0f};
     ASSERT_EQ(original.insert(10, a), vectordb::Status::ok);
@@ -139,7 +139,7 @@ TEST_F(PersistenceRoundTripTest, TombstonesPreserved) {
     ASSERT_EQ(original.remove(10), vectordb::Status::ok);
     ASSERT_EQ(vectordb::save_database(original, path_), vectordb::Status::ok);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(vectordb::load_database(path_, loaded), vectordb::Status::ok);
     EXPECT_EQ(loaded.size(), 1u);
     EXPECT_EQ(loaded.physical_size(), 2u);
@@ -151,12 +151,12 @@ TEST_F(PersistenceRoundTripTest, TombstonesPreserved) {
 }
 
 TEST_F(PersistenceRoundTripTest, EuclideanMetricPreserved) {
-    vectordb::VectorDB original(2, vectordb::Metric::euclidean);
+    vectordb::VectorDB original(2, vectordb::Metric::euclidean, vectordb::StorageMode::legacy);
     const float v[] = {3.0f, 4.0f};
     ASSERT_EQ(original.insert(7, v), vectordb::Status::ok);
     ASSERT_EQ(vectordb::save_database(original, path_), vectordb::Status::ok);
 
-    vectordb::VectorDB loaded(2);
+    vectordb::VectorDB loaded(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     ASSERT_EQ(vectordb::load_database(path_, loaded), vectordb::Status::ok);
     EXPECT_EQ(loaded.metric(), vectordb::Metric::euclidean);
 }
@@ -164,7 +164,7 @@ TEST_F(PersistenceRoundTripTest, EuclideanMetricPreserved) {
 class PersistenceCorruptionTest : public PersistenceSaveTest {
 protected:
     void write_valid_one_vector() {
-        vectordb::VectorDB db(2);
+        vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
         const float v[] = {1.0f, 2.0f};
         ASSERT_EQ(db.insert(1, v), vectordb::Status::ok);
         ASSERT_EQ(vectordb::save_database(db, path_), vectordb::Status::ok);
@@ -172,7 +172,7 @@ protected:
 };
 
 TEST_F(PersistenceCorruptionTest, MissingFileFails) {
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     const auto missing = (dir_ / "missing.vdb").string();
     EXPECT_EQ(vectordb::load_database(missing, db), vectordb::Status::invalid_argument);
 }
@@ -185,7 +185,7 @@ TEST_F(PersistenceCorruptionTest, BadMagicFails) {
         f.seekp(0);
         f.write("BADMAGIC", 8);
     }
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     EXPECT_EQ(vectordb::load_database(path_, db), vectordb::Status::invalid_argument);
 }
 
@@ -195,7 +195,7 @@ TEST_F(PersistenceCorruptionTest, TruncatedFileFails) {
     ASSERT_GT(size, 10u);
     fs::resize_file(path_, size / 2);
 
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     EXPECT_EQ(vectordb::load_database(path_, db), vectordb::Status::invalid_argument);
 }
 
@@ -209,7 +209,7 @@ TEST_F(PersistenceCorruptionTest, BadChecksumFails) {
         const std::uint32_t junk = 0xDEADBEEFu;
         f.write(reinterpret_cast<const char*>(&junk), 4);
     }
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     EXPECT_EQ(vectordb::load_database(path_, db), vectordb::Status::invalid_argument);
 }
 
@@ -222,6 +222,6 @@ TEST_F(PersistenceCorruptionTest, WrongVersionFails) {
         const std::uint32_t bad_version = 99;
         f.write(reinterpret_cast<const char*>(&bad_version), 4);
     }
-    vectordb::VectorDB db(2);
+    vectordb::VectorDB db(2, vectordb::Metric::cosine, vectordb::StorageMode::legacy);
     EXPECT_EQ(vectordb::load_database(path_, db), vectordb::Status::invalid_argument);
 }

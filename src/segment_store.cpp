@@ -5,12 +5,15 @@
 #include "vectordb/distance.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <queue>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
-#include <cstdio>
 
 namespace vectordb {
 namespace {
@@ -33,72 +36,123 @@ float score_pair(Metric metric, std::span<const float> query, std::span<const fl
     return 0.f;
 }
 
+std::uint64_t parse_segment_id(const std::string& name) {
+    static constexpr std::string_view prefix = "segment-";
+    static constexpr std::string_view suffix = ".vec";
+    if (name.size() <= prefix.size() + suffix.size()) {
+        return 0;
+    }
+    if (name.compare(0, prefix.size(), prefix) != 0) {
+        return 0;
+    }
+    if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0) {
+        return 0;
+    }
+    const std::string num = name.substr(prefix.size(), name.size() - prefix.size() - suffix.size());
+    try {
+        return std::stoull(num);
+    } catch (...) {
+        return 0;
+    }
+}
+
 }  // namespace
 
 SegmentStore::SegmentStore(std::string dir, std::size_t dimensions, Metric metric, std::size_t flush_threshold_rows)
-    : dir_(dir), metric_(metric), memtable_(dimensions, flush_threshold_rows) {}
+    : dir_(std::move(dir)), metric_(metric), memtable_(dimensions, flush_threshold_rows) {}
+
+bool SegmentStore::dir_opened() const noexcept {
+    return !dir_.empty();
+}
+
+bool SegmentStore::needs_flush() const noexcept {
+    return memtable_.needs_flush();
+}
+
+std::uint64_t SegmentStore::next_segment_id() const {
+    std::uint64_t max_id = 0;
+    for (const auto& name : manifest_.segments()) {
+        max_id = std::max(max_id, parse_segment_id(name));
+    }
+    return max_id + 1;
+}
+
+std::string SegmentStore::make_segment_name(std::uint64_t id) const {
+    std::ostringstream oss;
+    oss << "segment-" << std::setw(6) << std::setfill('0') << id << ".vec";
+    return oss.str();
+}
 
 Status SegmentStore::open() {
-    Status st = manifest_.load(dir_);
-    return st;
+    if (dir_.empty()) {
+        return Status::invalid_argument;
+    }
+    return manifest_.load(dir_);
+}
+
+Status SegmentStore::open(const std::string& dir) {
+    if (dir.empty()) {
+        return Status::invalid_argument;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        return Status::invalid_argument;
+    }
+    dir_ = dir;
+    return manifest_.load(dir_);
+}
+
+Status SegmentStore::maybe_auto_flush() {
+    if (dir_.empty() || !memtable_.needs_flush()) {
+        return Status::ok;
+    }
+    return flush();
 }
 
 Status SegmentStore::put(std::uint64_t id, const std::vector<float>& values) {
     Status st = memtable_.put(id, values);
-    return st;
+    if (st != Status::ok) {
+        return st;
+    }
+    return maybe_auto_flush();
 }
 
 Status SegmentStore::remove(std::uint64_t id) {
-    // LSM delete: must tombstone even if the live row only exists in a segment.
     memtable_.tombstone(id);
-    return Status::ok;
+    return maybe_auto_flush();
 }
 
 Status SegmentStore::flush() {
-    // get new segment name
-    std::uint64_t next_id = manifest_.segments().size() + 1;
+    if (dir_.empty()) {
+        return Status::invalid_argument;
+    }
+    if (memtable_.size() == 0) {
+        return Status::ok;
+    }
 
-    std::ostringstream oss;
-    oss << "segment-" << std::setw(6) << std::setfill('0') << next_id << ".vec";
-    std::string segment_name = oss.str();
-    // e.g segment-000001.vec
+    const std::string segment_name = make_segment_name(next_segment_id());
+    const std::string path = dir_ + "/" + segment_name;
 
-    // flush memtable, this will create a new segment file that will be used to store the new data
-
-    // so get the path to the new segment file
-    std::string path = dir_ + "/" + segment_name;
-    // now flush the memtable to the new segment file
     Status st = flush_memtable(memtable_, path, metric_);
     if (st != Status::ok) {
         return st;
     }
 
-    // now we need to add this new segment to the manifest and replace the old manifest file with the new file
-    manifest_.add(segment_name);
-    st = manifest_.replace(dir_);
+    Manifest next = manifest_;
+    next.add(segment_name);
+    st = next.replace(dir_);
     if (st != Status::ok) {
         return st;
     }
-
+    manifest_.add(segment_name);
     return Status::ok;
 }
 
 Status SegmentStore::compact() {
-    /*Algorithm
-If manifest_.segments().size() < 2 → Status::ok (nothing to do).
-Snapshot old = manifest_.segments() (copy the filenames).
-Build live: map<id, vector<float>> by walking segments newest → oldest (same as search’s segment loop):
-seen set; skip if already seen
-tombstone → mark seen, do not add to live
-live → add to live
-Do not include memtable entries in this merge (unless you explicitly flush first in the API — keep it simple: segments only).
-Choose new name: segment-{old.size()+1} zero-padded, or max existing number + 1.
-SegmentWriter: open → append each live row (sorted by id is nice, not required) → finish.
-Build new manifest list: clear() + add(new_name) + replace(dir_).
-Only after replace succeeds: std::remove each old filename under dir_.
-If replace fails: leave old MANIFEST; new file may be an orphan (OK for learning).
-Return ok.*/
-
+    if (dir_.empty()) {
+        return Status::invalid_argument;
+    }
     if (manifest_.segments().size() < 2) {
         return Status::ok;
     }
@@ -113,7 +167,7 @@ Return ok.*/
         if (reader.open() != Status::ok) {
             continue;
         }
-        
+
         std::vector<SegmentRow> rows;
         if (reader.read_all(rows) != Status::ok) {
             continue;
@@ -131,11 +185,8 @@ Return ok.*/
         }
     }
 
-    std::uint64_t new_id = manifest_.segments().size() + 1;
-    std::ostringstream oss;
-    oss << "segment-" << std::setw(6) << std::setfill('0') << new_id << ".vec";
-    std::string new_name = oss.str();
-    std::string new_path = dir_ + "/" + new_name;
+    const std::string new_name = make_segment_name(next_segment_id());
+    const std::string new_path = dir_ + "/" + new_name;
     SegmentWriter writer(new_path);
 
     if (writer.open(memtable_.dimensions(), metric_) != Status::ok) {
@@ -151,7 +202,7 @@ Return ok.*/
             return Status::invalid_argument;
         }
     }
-    
+
     if (writer.finish() != Status::ok) {
         return Status::invalid_argument;
     }
@@ -174,7 +225,6 @@ Return ok.*/
 }
 
 std::optional<std::vector<float>> SegmentStore::get(std::uint64_t id) const {
-    // 1) memtable present?
     if (auto e = memtable_.find(id)) {
         if (e->is_deleted) {
             return std::nullopt;
@@ -182,12 +232,9 @@ std::optional<std::vector<float>> SegmentStore::get(std::uint64_t id) const {
         return e->values;
     }
 
-    // 2) segments from newest to oldest
     for (auto it = manifest_.segments().rbegin(); it != manifest_.segments().rend(); ++it) {
-        // each it is a string of the segment name
         const std::string path = dir_ + "/" + *it;
 
-        // now open a segment reader to read the segment file
         SegmentReader reader(path);
         if (reader.open() != Status::ok) {
             continue;
@@ -198,22 +245,17 @@ std::optional<std::vector<float>> SegmentStore::get(std::uint64_t id) const {
             continue;
         }
 
-        // now that we have all the rows from the segment file, we need to search for the id
         for (const auto& row : rows) {
             if (row.id != id) {
                 continue;
             }
-            // first time we see this id in the walk -> newest segment file has it
             if (row.is_deleted) {
                 return std::nullopt;
             }
             return row.values;
         }
-
-        // if it was not found in this segment file, then we check the next segment file
     }
 
-    // if it was not found in any of the segment files, then it is not present in the database
     return std::nullopt;
 }
 
@@ -225,7 +267,6 @@ std::vector<SearchResult> SegmentStore::search(const std::vector<float>& query, 
     std::unordered_map<std::uint64_t, std::vector<float>> live;
     std::unordered_set<std::uint64_t> seen;
 
-    // walk memtable first (skip tombstones for candidates; mark tombstones as seen)
     for (const auto& [id, entry] : memtable_) {
         seen.insert(id);
         if (!entry.is_deleted) {
@@ -233,7 +274,6 @@ std::vector<SearchResult> SegmentStore::search(const std::vector<float>& query, 
         }
     }
 
-    // walk segments newest→oldest; skip ids already seen; skip deleted (mark seen)
     for (auto it = manifest_.segments().rbegin(); it != manifest_.segments().rend(); ++it) {
         const std::string path = dir_ + "/" + *it;
 
@@ -259,7 +299,6 @@ std::vector<SearchResult> SegmentStore::search(const std::vector<float>& query, 
         }
     }
 
-    // top-k heap: O(n log k), same idea as VectorDB::search
     std::priority_queue<SearchResult, std::vector<SearchResult>, WorseFirst> heap;
     for (const auto& [id, values] : live) {
         heap.push({id, score_pair(metric_, query, values)});
@@ -275,6 +314,11 @@ std::vector<SearchResult> SegmentStore::search(const std::vector<float>& query, 
     }
     std::reverse(results.begin(), results.end());
     return results;
+}
+
+std::size_t SegmentStore::live_count() const {
+    std::vector<float> dummy(memtable_.dimensions(), 0.f);
+    return search(dummy, std::numeric_limits<std::size_t>::max()).size();
 }
 
 }  // namespace vectordb

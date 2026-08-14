@@ -22,6 +22,8 @@ enum class Status {
     invalid_argument
 };
 
+enum class StorageMode { lsm, legacy };
+
 
 struct SearchResult {
     std::uint64_t id;
@@ -31,11 +33,15 @@ struct SearchResult {
 struct WalRecord;
 
 class WalWriter;
+class SegmentStore;
 
 
 class VectorDB {
 public:
-    explicit VectorDB(std::size_t dimensions, Metric metric = Metric::cosine);
+    explicit VectorDB(std::size_t dimensions,
+                      Metric metric = Metric::cosine,
+                      StorageMode mode = StorageMode::lsm,
+                      std::size_t flush_threshold_rows = 1024);
 
     Status save(const std::string& path) const;
     Status load(const std::string& path);
@@ -43,6 +49,10 @@ public:
 
     Status open(const std::string& snapshot_path, const std::string& wal_path);
     Status checkpoint(const std::string& snapshot_path);
+
+    Status open_lsm(const std::string& dir);
+    Status flush();
+    Status compact();
 
     VectorDB(VectorDB&&) noexcept;
     VectorDB& operator=(VectorDB&&) noexcept;
@@ -57,6 +67,7 @@ public:
     Status remove(std::uint64_t id);
     Status enable_wal(const std::string& path);
 
+    // LSM: span is valid until the next get() or mutating call.
     std::optional<std::span<const float>> get(std::uint64_t id) const;
     std::vector<SearchResult> search(std::span<const float> query, std::size_t k) const;
     float score_pair(std::span<const float> query, std::span<const float> candidate) const;
@@ -68,11 +79,21 @@ public:
     std::size_t dimensions() const noexcept;
     Metric metric() const noexcept;
     std::size_t size() const noexcept;  // active (non-deleted) count
+    StorageMode storage_mode() const noexcept;
 
 private:
+    bool is_lsm() const noexcept { return mode_ == StorageMode::lsm; }
+
+    Status lsm_insert(std::uint64_t id, std::span<const float> values);
+    Status lsm_update(std::uint64_t id, std::span<const float> values);
+    Status lsm_remove(std::uint64_t id);
+
+    StorageMode mode_ = StorageMode::lsm;
     Metric metric_;
     FlatVectorStore store_;
     IdIndex index_;
+    std::unique_ptr<SegmentStore> segments_;
+    mutable std::vector<float> get_scratch_;
     std::size_t active_count_ = 0;  // optional: track live rows without scanning
     std::unique_ptr<WalWriter> wal_; // pointer to the WAL writer
 

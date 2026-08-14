@@ -58,7 +58,7 @@ Why is a frozen segment file **never edited** after flush? (Hint: immutability s
 
 ```mermaid
 flowchart LR
-  subgraph v02["Version 0.2 (keep working)"]
+  subgraph v02["StorageMode::legacy"]
     ram["FlatVectorStore + IdIndex"]
     vdb[".vdb snapshot"]
     wal[".wal log"]
@@ -66,9 +66,9 @@ flowchart LR
     ram --> wal
   end
 
-  subgraph m7["Milestone 7 (build beside, then wire)"]
+  subgraph lsm["Default VectorDB — LSM"]
     mt["memtable"]
-    seg["segment-NNNNNN.*"]
+    seg["segment-NNNNNN.vec"]
     man["MANIFEST"]
     mt -->|"flush"| seg
     seg --> man
@@ -77,7 +77,7 @@ flowchart LR
 
 
 
-**Important:** tickets #9–#15 build segment pieces **without** breaking the existing `.vdb` + WAL path until we explicitly integrate. Two storage stories can coexist during learning.
+**Important:** tickets #9–#15 built segment pieces beside `.vdb` + WAL. **VectorDB now defaults to LSM** (`SegmentStore`, memtable until `open_lsm(dir)`). `.vdb` + WAL remain `StorageMode::legacy`. WAL+LSM is still deferred.
 
 ---
 
@@ -191,7 +191,12 @@ MANIFEST responsibilities:
 | Segments + MANIFEST | Append-only **bulk** state; avoid rewriting entire photo   |
 
 
-Long term, real systems combine these (log + LSM). For this learning repo: build segment machinery in M7 tickets first; decide later whether WAL feeds memtable directly or stays parallel to `.vdb` until a integration milestone.
+Long term, real systems combine these (log + LSM). **Now:** VectorDB default is segments + MANIFEST. WAL + `.vdb` remain `StorageMode::legacy`. WAL replay into the memtable is still deferred.
+
+**Follow-ups (not this wiring):**
+- Flush/clear ordering if a crash between segment write and MANIFEST replace can leave an orphan file
+- `fsync` of segment files before MANIFEST rename
+- WAL + LSM (log-before-mutate into memtable)
 
 ---
 
@@ -229,7 +234,8 @@ Do **one ticket at a time**. Do not implement compaction before reads work; do n
 | v0.2 `.vdb` + WAL          | Keep working; segment path built beside until integration                                                                         | 2026-08 |
 | Compaction trigger         | Manual API first (`compact()`); auto policy later                                                                                 | 2026-08 |
 | MANIFEST atomicity         | Write temp + rename over `MANIFEST` (document in #12)                                                                             | 2026-08 |
-| WAL + segments integration | Deferred — note open questions here when decided                                                                                  |         |
+| WAL + segments integration | Deferred — VectorDB default is LSM (segments + MANIFEST); WAL stays `StorageMode::legacy` | 2026-08 |
+| VectorDB default backend   | `StorageMode::lsm` (`SegmentStore`); in-memory until `open_lsm(dir)`                      | 2026-08 |
 
 
 ---
@@ -238,7 +244,7 @@ Do **one ticket at a time**. Do not implement compaction before reads work; do n
 
 1. ~~Does one segment file embed tombstones inline, or separate `.meta`?~~ → **Inline** (`deleted[]`).
 2. ~~Exact top-k during M7: scan all visible vectors — acceptable for learning?~~ → **Yes.**
-3. When do we stop using monolithic `.vdb` as the primary store?
+3. When do we stop using monolithic `.vdb` as the primary store? → **Now:** default VectorDB is LSM; `.vdb` is `StorageMode::legacy`. WAL+LSM still later.
 
 ---
 
@@ -261,4 +267,4 @@ When stuck: stop at the ticket boundary — don’t “finish LSM” in one jump
 
 ## Milestone 7 status
 
-**#8–#15 complete** — Milestone 7 LSM path beside v0.2: segments, memtable, flush, MANIFEST, newest-wins reads, tombstones, compaction. **Next:** Milestone 8 (metadata + filtering), or wire `SegmentStore` into `VectorDB`.
+**#8–#15 complete** — LSM path is the default `VectorDB` backend (`SegmentStore`, memtable until `open_lsm(dir)`). `.vdb` + WAL remain `StorageMode::legacy`. WAL+LSM still deferred. **Next:** Milestone 8 (metadata + filtering).
