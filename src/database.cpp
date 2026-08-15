@@ -219,46 +219,30 @@ Status VectorDB::lsm_remove(std::uint64_t id) {
 }
 
 Status VectorDB::insert(std::uint64_t id, std::span<const float> values) {
-    return insert(id, values, Metadata{});
-}
-
-Status VectorDB::insert(std::uint64_t id, std::span<const float> values,
-                        const Metadata& metadata) {
-    Status st;
     if (is_lsm()) {
-        st = lsm_insert(id, values);
-    } else {
-        if (values.size() != store_.dimensions()) {return Status::dimension_mismatch;}
-        if (index_.find(id) != std::nullopt) {return Status::duplicate_id;}
-        if (wal_){
-            WalRecord rec;
-            rec.op = WalOp::Insert;
-            rec.id = id;
-            rec.dimensions = store_.dimensions();
-            rec.values.assign(values.begin(), values.end());
-            maybe_crash(CrashPoint::BeforeWalAppend);
-            st = wal_->append(rec);
-            if (st != Status::ok) {return st;}
-            maybe_crash(CrashPoint::AfterWalAppendBeforeFlush);
-            st = wal_->flush();
-            if (st != Status::ok) {return st;}
-            maybe_crash(CrashPoint::AfterWalFlush);
-        }
-        auto pos = store_.append(id, values);
-        if (!pos) {return Status::dimension_mismatch;}
-        index_.insert(id, *pos);
-        ++active_count_;
-        maybe_crash(CrashPoint::AfterMemoryApply);
-        st = Status::ok;
+        return lsm_insert(id, values);
     }
-    if (st != Status::ok) {
-        return st;
+    if (values.size() != store_.dimensions()) {return Status::dimension_mismatch;}
+    if (index_.find(id) != std::nullopt) {return Status::duplicate_id;}
+    if (wal_){
+        WalRecord rec;
+        rec.op = WalOp::Insert;
+        rec.id = id;
+        rec.dimensions = store_.dimensions();
+        rec.values.assign(values.begin(), values.end());
+        maybe_crash(CrashPoint::BeforeWalAppend);
+        Status st = wal_->append(rec);
+        if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalAppendBeforeFlush);
+        st = wal_->flush();
+        if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalFlush);
     }
-    if (metadata.empty()) {
-        metadata_.erase(id);
-    } else {
-        metadata_[id] = metadata;
-    }
+    auto pos = store_.append(id, values);
+    if (!pos) {return Status::dimension_mismatch;}
+    index_.insert(id, *pos);
+    ++active_count_;
+    maybe_crash(CrashPoint::AfterMemoryApply);
     return Status::ok;
 }
 
@@ -296,51 +280,34 @@ Status VectorDB::update(std::uint64_t id, std::span<const float> values) {
 }
 
 Status VectorDB::remove(std::uint64_t id) {
-    Status st;
     if (is_lsm()) {
-        st = lsm_remove(id);
-    } else {
-        // 1) auto pos = index_.find(id); if !pos → not_found
-        // 2) store_.set_deleted(*pos, true)
-        // 3) index_.erase(id)
-        // 4) --active_count_
-        // 5) return ok
-        auto pos = index_.find(id);
-        if (!pos) {return Status::not_found;}
-        if (wal_){
-            WalRecord rec;
-            rec.op = WalOp::Delete;
-            rec.id = id;
-            maybe_crash(CrashPoint::BeforeWalAppend);
-            st = wal_->append(rec);
-            if (st != Status::ok) {return st;}
-            maybe_crash(CrashPoint::AfterWalAppendBeforeFlush);
-            st = wal_->flush();
-            if (st != Status::ok) {return st;}
-            maybe_crash(CrashPoint::AfterWalFlush);
-        }
-        if (store_.is_deleted(*pos)) {return Status::not_found;}
-        store_.set_deleted(*pos, true);
-        index_.erase(id);
-        --active_count_;
-        maybe_crash(CrashPoint::AfterMemoryApply);
-        st = Status::ok;
+        return lsm_remove(id);
     }
-    if (st == Status::ok) {
-        metadata_.erase(id);
+    // 1) auto pos = index_.find(id); if !pos → not_found
+    // 2) store_.set_deleted(*pos, true)
+    // 3) index_.erase(id)
+    // 4) --active_count_
+    // 5) return ok
+    auto pos = index_.find(id);
+    if (!pos) {return Status::not_found;}
+    if (wal_){
+        WalRecord rec;
+        rec.op = WalOp::Delete;
+        rec.id = id;
+        maybe_crash(CrashPoint::BeforeWalAppend);
+        Status st = wal_->append(rec);
+        if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalAppendBeforeFlush);
+        st = wal_->flush();
+        if (st != Status::ok) {return st;}
+        maybe_crash(CrashPoint::AfterWalFlush);
     }
-    return st;
-}
-
-std::optional<Metadata> VectorDB::get_metadata(std::uint64_t id) const {
-    if (!get(id).has_value()) {
-        return std::nullopt;
-    }
-    auto it = metadata_.find(id);
-    if (it == metadata_.end()) {
-        return Metadata{};
-    }
-    return it->second;
+    if (store_.is_deleted(*pos)) {return Status::not_found;}
+    store_.set_deleted(*pos, true);
+    index_.erase(id);
+    --active_count_;
+    maybe_crash(CrashPoint::AfterMemoryApply);
+    return Status::ok;
 }
 
 std::optional<std::span<const float>> VectorDB::get(std::uint64_t id) const {
