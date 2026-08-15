@@ -1,12 +1,3 @@
-// M8.3 starter tests — not wired into CMakeLists yet.
-//
-// Your job (#18):
-//   1. Implement PostingList::insert / erase / contains in src/posting_list.cpp
-//   2. Implement intersect (two pointers) and intersect_all
-//   3. Add src/posting_list.cpp to the vectordb library in CMakeLists.txt
-//   4. Add this file to vector_store_test sources
-//   5. No VectorDB / inverted-index wiring yet
-//
 #include "vectordb/posting_list.hpp"
 
 #include <gtest/gtest.h>

@@ -20,6 +20,8 @@ public:
 
 private:
     std::vector<std::uint64_t> ids_;  // ascending
+
+    friend PostingList intersect(const PostingList& a, const PostingList& b);
 };
 
 // Two-pointer intersection. Result is sorted + unique.
