@@ -215,6 +215,7 @@ Status VectorDB::lsm_remove(std::uint64_t id) {
         return st;
     }
     --active_count_;
+    metadata_.erase(id);
     return Status::ok;
 }
 
@@ -244,6 +245,20 @@ Status VectorDB::insert(std::uint64_t id, std::span<const float> values) {
     ++active_count_;
     maybe_crash(CrashPoint::AfterMemoryApply);
     return Status::ok;
+}
+
+Status VectorDB::insert(std::uint64_t id, std::span<const float> values, const Metadata& metadata) {
+    //insert using the LSM
+    Status st = insert(id, values);
+    if (st != Status::ok) {return st;}
+    if (metadata.empty()) {//erase the metadata if it is empty
+        metadata_.erase(id);
+        return Status::ok;
+    }
+    else {
+        metadata_[id] = metadata;
+        return Status::ok;
+    }
 }
 
 Status VectorDB::update(std::uint64_t id, std::span<const float> values) {
@@ -305,6 +320,7 @@ Status VectorDB::remove(std::uint64_t id) {
     if (store_.is_deleted(*pos)) {return Status::not_found;}
     store_.set_deleted(*pos, true);
     index_.erase(id);
+    metadata_.erase(id);
     --active_count_;
     maybe_crash(CrashPoint::AfterMemoryApply);
     return Status::ok;
@@ -326,6 +342,15 @@ std::optional<std::span<const float>> VectorDB::get(std::uint64_t id) const {
     if (!pos) {return std::nullopt;}
     if (store_.is_deleted(*pos)) {return std::nullopt;}
     return store_.values_at(*pos);
+}
+
+std::optional<Metadata> VectorDB::get_metadata(std::uint64_t id) const {
+    //first check if the id is in the DB
+    if(!get(id)) {return std::nullopt;}
+    //then check if the metadata is in the metadata_ map
+    auto it = metadata_.find(id);
+    if (it == metadata_.end()) return Metadata{};
+    return it->second;
 }
 
 std::size_t VectorDB::dimensions() const noexcept {
