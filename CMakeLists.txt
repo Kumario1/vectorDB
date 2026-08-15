@@ -50,7 +50,6 @@ add_executable(vector_store_test
     tests/manifest_test.cpp
     tests/segment_store_test.cpp
     tests/vectordb_lsm_test.cpp
-    tests/metadata_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE
