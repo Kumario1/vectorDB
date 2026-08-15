@@ -1,22 +1,17 @@
-// M8.4 starter tests — not wired into CMakeLists yet.
-//
-// Your job (#19):
-//   1. Implement EqualityIndex in src/equality_index.cpp
-//   2. Add src/equality_index.cpp to the vectordb library
-//   3. Add this file to vector_store_test
-//   4. Optional but recommended: hold EqualityIndex on VectorDB and
-//      call add/remove/update from insert/remove/set_metadata
-//   5. No filtered search yet (#20)
-//
 #include "vectordb/equality_index.hpp"
+#include "vectordb/database.hpp"
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 using vectordb::EqualityIndex;
 using vectordb::Metadata;
 using vectordb::MetadataValue;
+using vectordb::Status;
+using vectordb::VectorDB;
 
 TEST(EqualityIndexTest, LookupUnknownIsEmpty) {
     EqualityIndex idx;
@@ -70,4 +65,32 @@ TEST(EqualityIndexTest, DifferentTypesDoNotCollide) {
               (std::vector<std::uint64_t>{1}));
     EXPECT_EQ(idx.lookup("x", MetadataValue{std::string("42")}).ids(),
               (std::vector<std::uint64_t>{2}));
+}
+
+TEST(EqualityIndexTest, VectorDBInsertRemoveMaintainsIndex) {
+    VectorDB db(2);
+    const float v[] = {1.0f, 0.0f};
+    Metadata meta{{"category", std::string("book")}};
+    ASSERT_EQ(db.insert(4, v, meta), Status::ok);
+    ASSERT_EQ(db.insert(8, v, Metadata{{"category", std::string("book")}}), Status::ok);
+
+    EXPECT_EQ(db.lookup("category", MetadataValue{std::string("book")}).ids(),
+              (std::vector<std::uint64_t>{4, 8}));
+
+    ASSERT_EQ(db.remove(4), Status::ok);
+    EXPECT_EQ(db.lookup("category", MetadataValue{std::string("book")}).ids(),
+              (std::vector<std::uint64_t>{8}));
+}
+
+TEST(EqualityIndexTest, VectorDBSetMetadataMovesIndex) {
+    VectorDB db(2);
+    const float v[] = {1.0f, 0.0f};
+    ASSERT_EQ(db.insert(4, v, Metadata{{"category", std::string("book")}}), Status::ok);
+    ASSERT_EQ(db.set_metadata(4, Metadata{{"category", std::string("movie")}}), Status::ok);
+
+    EXPECT_TRUE(db.lookup("category", MetadataValue{std::string("book")}).empty());
+    EXPECT_EQ(db.lookup("category", MetadataValue{std::string("movie")}).ids(),
+              (std::vector<std::uint64_t>{4}));
+
+    EXPECT_EQ(db.set_metadata(99, Metadata{{"category", std::string("book")}}), Status::not_found);
 }
