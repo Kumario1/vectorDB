@@ -149,13 +149,14 @@ Do **one ticket at a time**. Posting lists before the index; the index before fi
 | Index structure | `unordered_map<field, map<value, PostingList>>`, posting list = sorted `vector<uint64_t>` | 2026-08 |
 | Filter strategy | Pre-filter via posting-list intersection; post-filter kept as test oracle | 2026-08 |
 | Metadata durability | **Deferred** — in-memory only this milestone; segment/sidecar format later | 2026-08 |
-| Wrong-type lookup | Reading field as wrong type → empty/`nullopt`, not a crash |  |
+| Wrong-type lookup | Reading field as wrong type → empty/`nullopt`, not a crash | 2026-08 |
+| Vector-only `update` | Leaves metadata unchanged; `remove` drops it; reinsert starts clean | 2026-08 |
 
 ---
 
 ## Open questions (resolve during implementation)
 
-1. Does `update(id, values)` (vector only) touch metadata, or is metadata updated through a separate call?
+1. ~~Does `update(id, values)` (vector only) touch metadata, or is metadata updated through a separate call?~~ → Vector-only `update` leaves metadata; replace via remove+reinsert for now (`set_metadata` later if needed).
 2. How do typed values compare inside one field — can `category` hold both `"book"` and `42`? (Index must not conflate them.)
 3. Where does metadata live long-term: inside `VECSEG` rows, a sidecar `.meta` file per segment, or a separate store?
 
