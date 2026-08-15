@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vectordb/flat_vector_store.hpp"
+#include "vectordb/metadata.hpp"
 #include "vectordb/id_index.hpp"
 #include <cstdint>
 #include <optional>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 
 namespace vectordb {
 
@@ -63,12 +65,14 @@ public:
     Status replay_wal(const std::string& wal_path, uint64_t& out_max_lsn);
 
     Status insert(std::uint64_t id, std::span<const float> values);
+    Status insert(std::uint64_t id, std::span<const float> values, const Metadata& metadata);
     Status update(std::uint64_t id, std::span<const float> values);
     Status remove(std::uint64_t id);
     Status enable_wal(const std::string& path);
 
     // LSM: span is valid until the next get() or mutating call.
     std::optional<std::span<const float>> get(std::uint64_t id) const;
+    std::optional<Metadata> get_metadata(std::uint64_t id) const;
     std::vector<SearchResult> search(std::span<const float> query, std::size_t k) const;
     float score_pair(std::span<const float> query, std::span<const float> candidate) const;
     std::size_t physical_size() const noexcept;
@@ -96,6 +100,7 @@ private:
     mutable std::vector<float> get_scratch_;
     std::size_t active_count_ = 0;  // optional: track live rows without scanning
     std::unique_ptr<WalWriter> wal_; // pointer to the WAL writer
+    std::unordered_map<uint64_t, Metadata> metadata_;
 
     std::string wal_path_;
     Status apply_wal_record(const WalRecord& rec);

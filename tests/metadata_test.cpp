@@ -1,20 +1,3 @@
-// M8.2 starter tests — not wired into CMakeLists yet.
-//
-// Your job (#17):
-//   1. Add to VectorDB:
-//        Status insert(uint64_t id, span<const float> values, const Metadata& metadata);
-//        optional<Metadata> get_metadata(uint64_t id) const;
-//      (2-arg insert stays; metadata insert is optional)
-//   2. Keep vector + metadata consistent:
-//        remove → drop metadata
-//        vector-only update → leave metadata
-//        reinsert without metadata → clean empty map
-//   3. get_metadata: missing/deleted id → nullopt; live id with none → empty Metadata
-//   4. Add this file to CMakeLists.txt vector_store_test sources
-//   5. Optional helper: get_field<T>(meta, key) → nullopt if missing or wrong type
-//
-// In-memory only — no segment / .vdb changes.
-
 #include "vectordb/database.hpp"
 #include "vectordb/metadata.hpp"
 
@@ -24,7 +7,9 @@
 #include <variant>
 
 using vectordb::Metadata;
+using vectordb::Metric;
 using vectordb::Status;
+using vectordb::StorageMode;
 using vectordb::VectorDB;
 
 namespace {
@@ -128,4 +113,36 @@ TEST(MetadataTest, VectorUpdateLeavesMetadata) {
     const auto got = db.get_metadata(1);
     ASSERT_TRUE(got.has_value());
     EXPECT_EQ(field<std::string>(*got, "category"), std::string("book"));
+}
+
+TEST(MetadataTest, LegacyModeAlsoStoresAndClearsMetadata) {
+    VectorDB db(2, Metric::cosine, StorageMode::legacy);
+    const float v[] = {1.0f, 0.0f};
+    Metadata meta{{"lang", std::string("en")}};
+    ASSERT_EQ(db.insert(7, v, meta), Status::ok);
+
+    const auto got = db.get_metadata(7);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_EQ(field<std::string>(*got, "lang"), std::string("en"));
+
+    ASSERT_EQ(db.remove(7), Status::ok);
+    EXPECT_FALSE(db.get_metadata(7).has_value());
+}
+
+TEST(MetadataTest, AllValueTypesRoundTrip) {
+    VectorDB db(2);
+    const float v[] = {0.0f, 1.0f};
+    Metadata meta{
+        {"i", std::int64_t{-3}},
+        {"d", 2.5},
+        {"b", false},
+        {"s", std::string("x")},
+    };
+    ASSERT_EQ(db.insert(3, v, meta), Status::ok);
+    const auto got = db.get_metadata(3);
+    ASSERT_TRUE(got.has_value());
+    EXPECT_EQ(field<std::int64_t>(*got, "i"), -3);
+    EXPECT_DOUBLE_EQ(*field<double>(*got, "d"), 2.5);
+    EXPECT_EQ(field<bool>(*got, "b"), false);
+    EXPECT_EQ(field<std::string>(*got, "s"), std::string("x"));
 }
