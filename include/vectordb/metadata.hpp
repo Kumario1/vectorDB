@@ -11,4 +11,10 @@ namespace vectordb {
 using MetadataValue = std::variant<std::int64_t, double, bool, std::string>;
 using Metadata = std::unordered_map<std::string, MetadataValue>;
 
+// One equality predicate for filtered search: field = value.
+struct EqualityPredicate {
+    std::string field;
+    MetadataValue value;
+};
+
 }  // namespace vectordb
