@@ -2,11 +2,14 @@
 
 #include "vectordb/flat_vector_store.hpp"
 #include "vectordb/metadata.hpp"
+#include "vectordb/equality_index.hpp"
 #include "vectordb/id_index.hpp"
+#include "vectordb/posting_list.hpp"
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 #include <unordered_map>
@@ -67,12 +70,15 @@ public:
     Status insert(std::uint64_t id, std::span<const float> values);
     Status insert(std::uint64_t id, std::span<const float> values, const Metadata& metadata);
     Status update(std::uint64_t id, std::span<const float> values);
+    Status set_metadata(std::uint64_t id, const Metadata& metadata);
     Status remove(std::uint64_t id);
     Status enable_wal(const std::string& path);
 
     // LSM: span is valid until the next get() or mutating call.
     std::optional<std::span<const float>> get(std::uint64_t id) const;
+    // Missing / deleted id → nullopt. Live id with no metadata → empty Metadata.
     std::optional<Metadata> get_metadata(std::uint64_t id) const;
+    PostingList lookup(std::string_view field, const MetadataValue& value) const;
     std::vector<SearchResult> search(std::span<const float> query, std::size_t k) const;
     float score_pair(std::span<const float> query, std::span<const float> candidate) const;
     std::size_t physical_size() const noexcept;
@@ -101,6 +107,7 @@ private:
     std::size_t active_count_ = 0;  // optional: track live rows without scanning
     std::unique_ptr<WalWriter> wal_; // pointer to the WAL writer
     std::unordered_map<uint64_t, Metadata> metadata_;
+    EqualityIndex eq_index_;
 
     std::string wal_path_;
     Status apply_wal_record(const WalRecord& rec);

@@ -215,7 +215,11 @@ Status VectorDB::lsm_remove(std::uint64_t id) {
         return st;
     }
     --active_count_;
-    metadata_.erase(id);
+    auto mit = metadata_.find(id);
+    if (mit != metadata_.end()) {
+        eq_index_.remove(id, mit->second);
+        metadata_.erase(mit);
+    }
     return Status::ok;
 }
 
@@ -248,17 +252,44 @@ Status VectorDB::insert(std::uint64_t id, std::span<const float> values) {
 }
 
 Status VectorDB::insert(std::uint64_t id, std::span<const float> values, const Metadata& metadata) {
-    //insert using the LSM
     Status st = insert(id, values);
     if (st != Status::ok) {return st;}
-    if (metadata.empty()) {//erase the metadata if it is empty
+    if (metadata.empty()) {
+        auto mit = metadata_.find(id);
+        if (mit != metadata_.end()) {
+            eq_index_.remove(id, mit->second);
+            metadata_.erase(mit);
+        }
+        return Status::ok;
+    }
+    metadata_[id] = metadata;
+    eq_index_.add(id, metadata);
+    return Status::ok;
+}
+
+Status VectorDB::set_metadata(std::uint64_t id, const Metadata& metadata) {
+    if (!get(id).has_value()) {
+        return Status::not_found;
+    }
+    Metadata old;
+    auto mit = metadata_.find(id);
+    if (mit != metadata_.end()) {
+        old = mit->second;
+    }
+    if (metadata.empty()) {
+        if (!old.empty()) {
+            eq_index_.remove(id, old);
+        }
         metadata_.erase(id);
         return Status::ok;
     }
-    else {
-        metadata_[id] = metadata;
-        return Status::ok;
+    if (old.empty()) {
+        eq_index_.add(id, metadata);
+    } else {
+        eq_index_.update(id, old, metadata);
     }
+    metadata_[id] = metadata;
+    return Status::ok;
 }
 
 Status VectorDB::update(std::uint64_t id, std::span<const float> values) {
@@ -320,7 +351,11 @@ Status VectorDB::remove(std::uint64_t id) {
     if (store_.is_deleted(*pos)) {return Status::not_found;}
     store_.set_deleted(*pos, true);
     index_.erase(id);
-    metadata_.erase(id);
+    auto mit = metadata_.find(id);
+    if (mit != metadata_.end()) {
+        eq_index_.remove(id, mit->second);
+        metadata_.erase(mit);
+    }
     --active_count_;
     maybe_crash(CrashPoint::AfterMemoryApply);
     return Status::ok;
@@ -351,6 +386,10 @@ std::optional<Metadata> VectorDB::get_metadata(std::uint64_t id) const {
     auto it = metadata_.find(id);
     if (it == metadata_.end()) return Metadata{};
     return it->second;
+}
+
+PostingList VectorDB::lookup(std::string_view field, const MetadataValue& value) const {
+    return eq_index_.lookup(field, value);
 }
 
 std::size_t VectorDB::dimensions() const noexcept {

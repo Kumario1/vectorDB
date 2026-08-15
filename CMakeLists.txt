@@ -20,6 +20,7 @@ add_library(vectordb
     src/manifest.cpp
     src/segment_store.cpp
     src/posting_list.cpp
+    src/equality_index.cpp
 )
 target_include_directories(vectordb
     PUBLIC
@@ -53,6 +54,7 @@ add_executable(vector_store_test
     tests/vectordb_lsm_test.cpp
     tests/metadata_test.cpp
     tests/posting_list_test.cpp
+    tests/equality_index_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE
