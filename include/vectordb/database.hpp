@@ -2,10 +2,12 @@
 
 #include "vectordb/flat_vector_store.hpp"
 #include "vectordb/id_index.hpp"
+#include "vectordb/metadata.hpp"
 #include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <memory>
 
@@ -63,12 +65,15 @@ public:
     Status replay_wal(const std::string& wal_path, uint64_t& out_max_lsn);
 
     Status insert(std::uint64_t id, std::span<const float> values);
+    Status insert(std::uint64_t id, std::span<const float> values, const Metadata& metadata);
     Status update(std::uint64_t id, std::span<const float> values);
     Status remove(std::uint64_t id);
     Status enable_wal(const std::string& path);
 
     // LSM: span is valid until the next get() or mutating call.
     std::optional<std::span<const float>> get(std::uint64_t id) const;
+    // Missing / deleted id → nullopt. Live id with no metadata → empty Metadata.
+    std::optional<Metadata> get_metadata(std::uint64_t id) const;
     std::vector<SearchResult> search(std::span<const float> query, std::size_t k) const;
     float score_pair(std::span<const float> query, std::span<const float> candidate) const;
     std::size_t physical_size() const noexcept;
@@ -94,6 +99,7 @@ private:
     IdIndex index_;
     std::unique_ptr<SegmentStore> segments_;
     mutable std::vector<float> get_scratch_;
+    std::unordered_map<std::uint64_t, Metadata> metadata_;  // in-memory only (M8)
     std::size_t active_count_ = 0;  // optional: track live rows without scanning
     std::unique_ptr<WalWriter> wal_; // pointer to the WAL writer
 
