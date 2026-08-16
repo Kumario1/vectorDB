@@ -55,6 +55,7 @@ add_executable(vector_store_test
     tests/metadata_test.cpp
     tests/posting_list_test.cpp
     tests/equality_index_test.cpp
+    tests/filtered_search_test.cpp
 )
 target_link_libraries(vector_store_test
     PRIVATE

@@ -487,4 +487,37 @@ std::vector<SearchResult> VectorDB::search(std::span<const float> query, std::si
     // 5) pop all into a vector, reverse so best is first
 }
 
+std::vector<SearchResult> VectorDB::search(std::span<const float> query, std::size_t k,
+                                           std::span<const EqualityPredicate> filter) const {
+    if (query.size() != dimensions()) {return {};}
+    if (k == 0) {return {};}
+    if (filter.empty()) {return search(query, k);}
+
+    std::vector<PostingList> lists;
+    lists.reserve(filter.size());
+    for (const auto& pred : filter) {
+        PostingList pl = eq_index_.lookup(pred.field, pred.value);
+        if (pl.empty()) {return {};}
+        lists.push_back(std::move(pl));
+    }
+    const PostingList candidates = intersect_all(lists);
+
+    std::priority_queue<SearchResult, std::vector<SearchResult>, WorseFirst> heap;
+    for (std::uint64_t id : candidates.ids()) {
+        // get(id) skips deleted/missing ids the index might still reference.
+        auto values = get(id);
+        if (!values) {continue;}
+        heap.push({id, score_pair(query, *values)});
+        if (heap.size() > k) {heap.pop();}
+    }
+
+    std::vector<SearchResult> results;
+    while (!heap.empty()) {
+        results.push_back(heap.top());
+        heap.pop();
+    }
+    std::reverse(results.begin(), results.end());
+    return results;
+}
+
 }  // namespace vectordb

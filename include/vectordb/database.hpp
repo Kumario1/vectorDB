@@ -80,6 +80,9 @@ public:
     std::optional<Metadata> get_metadata(std::uint64_t id) const;
     PostingList lookup(std::string_view field, const MetadataValue& value) const;
     std::vector<SearchResult> search(std::span<const float> query, std::size_t k) const;
+    // Pre-filtered top-k: AND of equality predicates via posting-list intersection.
+    std::vector<SearchResult> search(std::span<const float> query, std::size_t k,
+                                     std::span<const EqualityPredicate> filter) const;
     float score_pair(std::span<const float> query, std::span<const float> candidate) const;
     std::size_t physical_size() const noexcept;
     std::uint64_t id_at(std::size_t index) const noexcept;
