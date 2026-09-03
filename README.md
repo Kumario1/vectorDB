@@ -23,7 +23,8 @@ flowchart LR
   Man --> Read[SegmentStore read path]
   Read --> Comp[Compaction]
   Comp --> LSM[VectorDB default LSM]
-  LSM --> M8[Metadata — next]
+  LSM --> M8[Metadata + equality filters]
+  M8 --> M9[Bitmaps — next]
 ```
 
 | Topic | Progress |
@@ -45,7 +46,8 @@ flowchart LR
 | Tests | **157/157** CTest passing |
 | Compaction | Done (M7 #15): merge all segments → one file + MANIFEST swap |
 | VectorDB default | **LSM** (`SegmentStore`); memtable until `open_lsm(dir)`; `.vdb`+WAL is `StorageMode::legacy` |
-| Milestone 8 | **Next:** metadata storage + filtering |
+| Milestone 8 | **Done** (#16–#20): metadata, posting lists, equality index, filtered search |
+| Milestone 9 | **Next:** bitmap indexes (low-cardinality filters) |
 
 ```mermaid
 pie title C++ lines by area (~3,900 total)
@@ -479,8 +481,17 @@ flowchart LR
 
 **Benchmark takeaway** (`checkpoint_vs_segment_benchmark`): at **128-d × 100K** vectors, a full `.vdb` checkpoint wrote **~52 MB** in **~0.079s**; flushing a **1K-row** segment wrote **~0.52 MB** in **~0.001s** — about **76×** faster and **100×** fewer bytes for that batch.
 
-**Milestone 7 status:** tickets **#8–#15** done. **`VectorDB` default is LSM** (`SegmentStore`); `.vdb`+WAL is `StorageMode::legacy`; WAL+LSM still deferred. **Next:** Milestone 8 metadata / filtering.  
+**Milestone 7 status:** tickets **#8–#15** done. **`VectorDB` default is LSM** (`SegmentStore`); `.vdb`+WAL is `StorageMode::legacy`; WAL+LSM still deferred.  
 Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
+
+---
+
+## Metadata + equality filters
+
+**What I learned:** Real search is almost never “nearest, period.” Pre-filter with an inverted index (`field → value → sorted posting list`), intersect lists, then score only candidates. Post-filter can return fewer than k. Metadata is in-memory only this far.
+
+**Milestone 8 complete** (#16–#20). **Next:** Milestone 9 bitmap indexes — same filters, bits instead of id lists when fields are low-cardinality.  
+Detail: [`notes/08-metadata-filtering.md`](notes/08-metadata-filtering.md) · [`notes/09-bitmap-indexes.md`](notes/09-bitmap-indexes.md).
 
 ---
 
@@ -492,7 +503,7 @@ src/                implementations
 tests/              GoogleTest (157 cases)
 tools/              CLI + format / wal / segment sandboxes
 benchmarks/         AoS vs SoA scans + checkpoint vs segment I/O
-notes/              design, memory-layout, WAL, segments learning notes
+notes/              design, memory-layout, WAL, segments, metadata, bitmaps
 ```
 
 ---
@@ -524,8 +535,8 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**Version 0.2 done** (Milestone 6, `StorageMode::legacy`). **Milestone 7 done** (#8–#15); VectorDB default is LSM. **Next:** Milestone 8 — metadata and filtering.  
-Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
+**Version 0.2 done** (Milestone 6, `StorageMode::legacy`). **Milestone 7 done** (#8–#15). **Milestone 8 done** (#16–#20). **Next:** Milestone 9 — bitmap indexes.  
+Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md) · [`notes/08-metadata-filtering.md`](notes/08-metadata-filtering.md) · [`notes/09-bitmap-indexes.md`](notes/09-bitmap-indexes.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---
 
