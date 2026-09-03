@@ -21,6 +21,7 @@ add_library(vectordb
     src/segment_store.cpp
     src/posting_list.cpp
     src/equality_index.cpp
+    src/bitset.cpp
 )
 target_include_directories(vectordb
     PUBLIC
@@ -54,6 +55,7 @@ add_executable(vector_store_test
     tests/vectordb_lsm_test.cpp
     tests/metadata_test.cpp
     tests/posting_list_test.cpp
+    tests/bitset_test.cpp
     tests/equality_index_test.cpp
     tests/filtered_search_test.cpp
 )
