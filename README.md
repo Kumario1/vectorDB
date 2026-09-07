@@ -24,7 +24,8 @@ flowchart LR
   Read --> Comp[Compaction]
   Comp --> LSM[VectorDB default LSM]
   LSM --> M8[Metadata + equality filters]
-  M8 --> M9[Bitmaps — next]
+  M8 --> Bitset[Bitset combine + iterate]
+  Bitset --> M9next[BitmapIndex — next]
 ```
 
 | Topic | Progress |
@@ -43,11 +44,11 @@ flowchart LR
 | MANIFEST | `VECMAN01` load + temp/fsync/rename replace (M7 #12) |
 | SegmentStore read path | Newest-wins `get` / top-k `search`; LSM `tombstone` delete (M7 #13) |
 | Checkpoint vs segment I/O | Microbench: flush batch ≪ full `.vdb` rewrite |
-| Tests | **157/157** CTest passing |
+| Tests | **201/201** CTest passing |
 | Compaction | Done (M7 #15): merge all segments → one file + MANIFEST swap |
 | VectorDB default | **LSM** (`SegmentStore`); memtable until `open_lsm(dir)`; `.vdb`+WAL is `StorageMode::legacy` |
 | Milestone 8 | **Done** (#16–#20): metadata, posting lists, equality index, filtered search |
-| Milestone 9 | **Next:** bitmap indexes (low-cardinality filters) |
+| Milestone 9 | In progress: learning note + `Bitset` (#21–#23); next `BitmapIndex` + id↔slot (#24) |
 
 ```mermaid
 pie title C++ lines by area (~3,900 total)
@@ -490,17 +491,37 @@ Detail: [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md).
 
 **What I learned:** Real search is almost never “nearest, period.” Pre-filter with an inverted index (`field → value → sorted posting list`), intersect lists, then score only candidates. Post-filter can return fewer than k. Metadata is in-memory only this far.
 
-**Milestone 8 complete** (#16–#20). **Next:** Milestone 9 bitmap indexes — same filters, bits instead of id lists when fields are low-cardinality.  
-Detail: [`notes/08-metadata-filtering.md`](notes/08-metadata-filtering.md) · [`notes/09-bitmap-indexes.md`](notes/09-bitmap-indexes.md).
+**Milestone 8 complete** (#16–#20).  
+Detail: [`notes/08-metadata-filtering.md`](notes/08-metadata-filtering.md).
+
+---
+
+## Bitmap indexes (Milestone 9)
+
+**What I learned:** Posting lists pay for **matches** (k); bitmaps pay for the **universe** (N) in 64-bit chunks. Dense / low-cardinality filters (`lang`, `active`) prefer bits; selective / high-cardinality filters prefer lists. Bits live in `uint64_t` **words** (`slot/64`); vector **ids** are not bit positions — an id↔slot map comes next.
+
+**Shipped (#21–#23):**
+- Learning note: [`notes/09-bitmap-indexes.md`](notes/09-bitmap-indexes.md)
+- Dynamic `Bitset`: `set` / `clear` / `test`, grow-on-set
+- Combine: `&` `|` `^` `~` (word-wise; missing words act as 0 for `|`/`^`)
+- `count()` via `popcount` + last-word mask; `set_bits()` via `countr_zero` + clear-lowest-bit
+
+```text
+book:  1 0 1 1 0 0 1 0     words_[0] = 77
+en:    1 1 1 0 0 1 1 0     words_[0] = 103
+AND:   1 0 1 0 0 0 1 0     77 & 103 = 69 → set_bits {0, 2, 6}
+```
+
+**Still open:** `#24` `BitmapIndex` + id↔slot map; `#25` bench vs `unordered_set` / posting lists (wire into `search` only if justified).
 
 ---
 
 ## Repo layout
 
 ```text
-include/vectordb/   public headers (database, wal, segment, memtable, manifest, segment_store, …)
+include/vectordb/   public headers (database, wal, segment, bitset, equality_index, …)
 src/                implementations
-tests/              GoogleTest (157 cases)
+tests/              GoogleTest (201 cases)
 tools/              CLI + format / wal / segment sandboxes
 benchmarks/         AoS vs SoA scans + checkpoint vs segment I/O
 notes/              design, memory-layout, WAL, segments, metadata, bitmaps
@@ -535,7 +556,7 @@ ctest --test-dir build --output-on-failure
 4. **Benchmark** when layout or speed claims matter  
 5. **Reflect** — what broke, what to redesign  
 
-**Version 0.2 done** (Milestone 6, `StorageMode::legacy`). **Milestone 7 done** (#8–#15). **Milestone 8 done** (#16–#20). **Next:** Milestone 9 — bitmap indexes.  
+**Version 0.2 done** (Milestone 6). **Milestone 7–8 done.** **Milestone 9:** `Bitset` done (#21–#23); next `BitmapIndex` (#24).  
 Notes: [`notes/06-wal-learning.md`](notes/06-wal-learning.md) · [`notes/07-segments-compaction.md`](notes/07-segments-compaction.md) · [`notes/08-metadata-filtering.md`](notes/08-metadata-filtering.md) · [`notes/09-bitmap-indexes.md`](notes/09-bitmap-indexes.md) · Curriculum: [`README_VectorDB_From_Scratch.md`](README_VectorDB_From_Scratch.md).
 
 ---
